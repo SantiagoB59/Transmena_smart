@@ -45,6 +45,10 @@ def enviar_reporte_diario_alertas(app):
 
         archivo_excel = generar_excel_alertas(alertas)
 
+        destinatarios = [
+        "ferney.bonilla59@gmail.com",
+        "auxiliaroperaciones@transmenaycarga.com",
+        ]
         destinatario = os.getenv(
             "ALERTA_EMAIL",
             "ferney.bonilla59@gmail.com"
@@ -166,7 +170,7 @@ def enviar_reporte_diario_alertas(app):
 
         msg = Message(
             subject=f"📊 Consolidado Diario de Alertas - {hoy}",
-            recipients=[destinatario]
+            recipients=destinatarios
         )
 
         msg.html = html
@@ -180,7 +184,7 @@ def enviar_reporte_diario_alertas(app):
             data=archivo_excel.getvalue()
         )
 
-        print(f"📧 Enviando a: {destinatario}")
+        print(f"📧 Enviando a: {destinatarios}")
 
         mail.send(msg)
 

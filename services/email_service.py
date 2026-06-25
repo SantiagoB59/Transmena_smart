@@ -4,8 +4,13 @@ from flask import current_app
 import os
 
 
-def enviar_email_alerta(alerta):
 
+def enviar_email_alerta(alerta):
+    destinatarios = [
+        "ferney.bonilla59@gmail.com",
+        "auxiliaroperaciones@transmenaycarga.com",
+    ]
+    
     destinatario = os.getenv(
         "ALERTA_EMAIL",
         "ferney.bonilla59@gmail.com"
@@ -29,7 +34,7 @@ def enviar_email_alerta(alerta):
 
     msg = Message(
         subject=f"🚨 ALERTA {alerta.prioridad} | {placa}",
-        recipients=[destinatario]
+        recipients=destinatarios
     )
 
     # =========================
