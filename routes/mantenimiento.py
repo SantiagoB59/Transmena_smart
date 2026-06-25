@@ -276,7 +276,8 @@ def crear():
 
             file.save(filepath)
 
-            soporte_path = filepath
+# Guardar la ruta para la web, no la del sistema operativo
+            soporte_path = f"uploads/mantenimientos/{filename}"
 
     # =====================================
     # CREAR
