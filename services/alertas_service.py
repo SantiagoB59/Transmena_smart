@@ -488,7 +488,7 @@ def ejecutar_motor_alertas():
 
     generar_alertas_velocidad()
 
-    generar_alertas_apagado()
+    # generar_alertas_apagado()
 
 
 # =========================================================
