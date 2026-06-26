@@ -1,9 +1,14 @@
 from apscheduler.schedulers.background import BackgroundScheduler
+from zoneinfo import ZoneInfo
+
 from services.reporte_alertas_email import (
     enviar_reporte_diario_alertas
 )
 
-scheduler = BackgroundScheduler()
+# Configurar la zona horaria de Colombia
+scheduler = BackgroundScheduler(
+    timezone=ZoneInfo("America/Bogota")
+)
 
 
 def iniciar_scheduler(app):
@@ -19,7 +24,7 @@ def iniciar_scheduler(app):
 
     scheduler.start()
 
-    print("✅ Scheduler iniciado (Reporte diario 6:00 PM)")
+    print("✅ Scheduler iniciado (Reporte diario 6:00 PM - America/Bogota)")
     
     
 # Ejecutar cada minuto para pruebas
