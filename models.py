@@ -1347,49 +1347,132 @@ class SistemaVehiculo(db.Model):
     created_at = db.Column(db.DateTime, server_default=db.func.now())
     
     
-
-
 class Viaje(db.Model):
     __tablename__ = 'viajes'
 
+    # ==========================
+    # ID
+    # ==========================
     id = db.Column(db.Integer, primary_key=True)
-    vehiculo_id = db.Column(db.Integer)
-    remolque_id = db.Column(db.Integer)
+
+    # ==========================
+    # VEHÍCULO Y REMOLQUE
+    # ==========================
+    vehiculo_id = db.Column(
+        db.Integer,
+        db.ForeignKey('vehiculos.id'),
+        nullable=False
+    )
+
+    remolque_id = db.Column(
+        db.Integer,
+        db.ForeignKey('vehiculos.id'),
+        nullable=True
+    )
+
+    vehiculo = db.relationship(
+        'Vehiculo',
+        foreign_keys=[vehiculo_id]
+    )
+
+    remolque = db.relationship(
+        'Vehiculo',
+        foreign_keys=[remolque_id]
+    )
+
+    # ==========================
+    # CONDUCTOR
+    # ==========================
     conductor = db.Column(db.String(100))
     cc_conductor = db.Column(db.String(50))
+
+    # ==========================
+    # RUTA
+    # ==========================
     origen = db.Column(db.String(255))
     destino = db.Column(db.String(255))
+
+    # ==========================
+    # CARGA
+    # ==========================
     cliente = db.Column(db.String(150))
     tipo_carga = db.Column(db.String(100))
     descripcion_carga = db.Column(db.Text)
     peso = db.Column(db.Numeric)
+
+    # ==========================
+    # KILOMETRAJE DEL REMOLQUE
+    # ==========================
     km_inicio = db.Column(db.Integer)
     km_fin = db.Column(db.Integer)
     km_recorrido = db.Column(db.Integer)
-    estado = db.Column(db.String(50))
-    created_at = db.Column(db.DateTime)
-    activo = db.Column(db.Boolean, default=True)
 
+    # ==========================
+    # OBSERVACIONES
+    # ==========================
+    observaciones = db.Column(db.Text)
+
+    # ==========================
+    # ESTADO
+    # ==========================
+    estado = db.Column(
+        db.String(50),
+        default='PROGRAMADO'
+    )
+
+    # ==========================
+    # CONTROL
+    # ==========================
+    activo = db.Column(
+        db.Boolean,
+        default=True
+    )
+
+    created_at = db.Column(
+        db.DateTime,
+        server_default=db.func.now()
+    )
+
+    # ==========================
+    # SERIALIZACIÓN
+    # ==========================
     def to_dict(self):
         return {
+
             "id": self.id,
+
             "vehiculo_id": self.vehiculo_id,
             "remolque_id": self.remolque_id,
+
+            "vehiculo": self.vehiculo.to_dict() if self.vehiculo else None,
+            "remolque": self.remolque.to_dict() if self.remolque else None,
+
             "conductor": self.conductor,
             "cc_conductor": self.cc_conductor,
+
             "origen": self.origen,
             "destino": self.destino,
+
             "cliente": self.cliente,
             "tipo_carga": self.tipo_carga,
             "descripcion_carga": self.descripcion_carga,
+
             "peso": float(self.peso) if self.peso else None,
+
             "km_inicio": self.km_inicio,
             "km_fin": self.km_fin,
             "km_recorrido": self.km_recorrido,
+
+            "observaciones": self.observaciones,
+
             "estado": self.estado,
-            "created_at": self.created_at,
+
             "activo": self.activo,
-            
+
+            "created_at": (
+                self.created_at.isoformat()
+                if self.created_at else None
+            )
         }
 
 
