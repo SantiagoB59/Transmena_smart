@@ -1047,7 +1047,7 @@ def exportar_formato_mantenimiento(vehiculo_id):
                     column=col
                 ).fill = gris
 
-        ws.row_dimensions[fila_actual].height = 90
+        ws.row_dimensions[fila_actual].height = 300
         fila_actual += 1
 
     # =================================================
