@@ -975,7 +975,7 @@ def exportar_formato_mantenimiento(vehiculo_id):
         )
 
         ws[f'A{fila_actual}'] = (
-            str(m.observaciones or '')
+            getattr(m.plan_item, 'nombre', '')
         )
 
         ws.merge_cells(
