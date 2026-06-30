@@ -20,6 +20,8 @@ from openpyxl.styles import (
     Border,
     Side
 )
+from openpyxl.drawing.image import Image
+import os
 
 from models import (
     Alerta,
@@ -659,7 +661,8 @@ def exportar_formato_mantenimiento(vehiculo_id):
         'F': 16,
         'G': 18,
         'H': 12,
-        'I': 12
+        'I': 12,
+        'J': 12
 
     }
 
@@ -926,18 +929,18 @@ def exportar_formato_mantenimiento(vehiculo_id):
 
         'MANTENIMIENTO\nPREVENTIVO',
 
-        'MANTENIMIENTO\nCORRECTIVO'
+        'MANTENIMIENTO\nCORRECTIVO',
+        'SOPORTE'
 
     ]
 
     merges = [
-
         'A14:D15',
         'E14:F15',
         'G14:G15',
         'H14:H15',
-        'I14:I15'
-
+        'I14:I15',
+        'J14:J15'
     ]
 
     for i, merge in enumerate(merges):
@@ -989,6 +992,24 @@ def exportar_formato_mantenimiento(vehiculo_id):
         ws[f'G{fila_actual}'] = (
             str(getattr(m, 'responsable', '') or '')
         )
+        if m.soporte:
+            ruta_imagen = os.path.join(
+                os.getcwd(),
+                m.soporte
+            )
+
+            if os.path.exists(ruta_imagen):
+
+                img = Image(ruta_imagen)
+
+                img.width = 80
+                img.height = 60
+
+        # Columna J
+            ws.add_image(
+                img,
+                f'J{fila_actual}'
+            )
 
         if m.tipo == 'PREVENTIVO':
 
@@ -1026,8 +1047,7 @@ def exportar_formato_mantenimiento(vehiculo_id):
                     column=col
                 ).fill = gris
 
-        ws.row_dimensions[fila_actual].height = 32
-
+        ws.row_dimensions[fila_actual].height = 90
         fila_actual += 1
 
     # =================================================
