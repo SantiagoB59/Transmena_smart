@@ -184,6 +184,16 @@ class Vehiculo(db.Model):
         backref='vehiculo',
         lazy=True
     )
+    
+    # ==========================
+    # 📋 INSPECCIONES MENSUALES
+    # =========================
+    inspecciones = db.relationship(
+        'InspeccionMensual',
+        backref='vehiculo',
+        lazy=True,
+        cascade='all, delete-orphan'
+    )
 
     # ==========================
     # 🚗 KM TOTAL
@@ -1061,6 +1071,16 @@ class Maquinaria(db.Model):
 
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
+    # ==========================
+    # 📋 INSPECCIONES MENSUALES
+    # ==========================
+    inspecciones = db.relationship(
+        'InspeccionMensual',
+        backref='maquinaria',
+        lazy=True,
+        cascade='all, delete-orphan'
+    )
+    
     def to_dict(self):
         return {
             "id": self.id,
@@ -1753,3 +1773,50 @@ class ConfiguracionSistema(db.Model):
     id = db.Column(db.Integer, primary_key=True)
 
     ultima_sync_satrack = db.Column(db.DateTime)
+    
+    
+
+# ==========================
+# INSPECCIONES MENSUALES
+# ==========================
+class InspeccionMensual(db.Model):
+    __tablename__ = "inspecciones_mensuales"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    vehiculo_id = db.Column(
+        db.Integer,
+        db.ForeignKey("vehiculos.id"),
+        nullable=True
+    )
+
+    maquinaria_id = db.Column(
+        db.Integer,
+        db.ForeignKey("maquinaria.id"),
+        nullable=True
+    )
+
+    fecha = db.Column(db.Date, nullable=False)
+
+    archivo = db.Column(
+        db.String(255),
+        nullable=False
+    )
+
+    observaciones = db.Column(db.Text)
+
+    created_at = db.Column(
+        db.DateTime,
+        server_default=db.func.now()
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "vehiculo_id": self.vehiculo_id,
+            "maquinaria_id": self.maquinaria_id,
+            "fecha": str(self.fecha),
+            "archivo": self.archivo,
+            "observaciones": self.observaciones,
+            "created_at": str(self.created_at)
+        }

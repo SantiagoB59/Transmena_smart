@@ -24,6 +24,7 @@ from routes.reportes import reportes_bp
 from routes.importador import importador_bp
 from extensions import mail
 from routes.test_routes import test_bp
+from routes.inspeccion_mensual import inspeccion_mensual_bp
 from scheduler import iniciar_scheduler
 # from routes.mantenimiento_importar import mantenimiento_importar_bp
 
@@ -79,6 +80,7 @@ def create_app():
     app.register_blueprint(importador_bp, url_prefix="/api/importador")
     app.register_blueprint(test_bp, url_prefix='/api/test')
     # app.register_blueprint(mantenimiento_importar_bp, url_prefix='/api/mantenimiento_importar')
+    app.register_blueprint(inspeccion_mensual_bp, url_prefix='/api/inspeccion_mensual')
     # ==============================
     # SERVIR IMÁGENES
     # ==============================
