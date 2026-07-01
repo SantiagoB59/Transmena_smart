@@ -83,7 +83,6 @@ def parse_fecha(fecha):
 
         return None
 
-
 # =========================================
 # 📡 OBTENER EVENTOS
 # =========================================
@@ -110,19 +109,31 @@ def obtener_eventos():
     if not service_codes:
 
         print("⚠️ No hay GPS IDs")
-
         return []
 
     print(f"🚗 Vehículos GPS: {len(service_codes)}")
 
     # =====================================
-    # ⏱ RANGO FECHAS
+    # ⏱ RANGO DE FECHAS
     # =====================================
     end = datetime.utcnow()
 
-    # 👇 temporalmente 5 días
-    # luego puedes volver a minutos
-    start = end - timedelta(days=5)
+    ultima_fecha = db.session.query(
+        db.func.max(VehiculoUbicacionActual.fecha_gps)).scalar()
+    if ultima_fecha:
+    # un minuto de traslape por seguridad
+        start = ultima_fecha - timedelta(minutes=1)
+    else:
+        start = end - timedelta(minutes=30)
+
+    # Cuando tengas ConfiguracionSistema sería:
+    #
+    # config = ConfiguracionSistema.query.first()
+    #
+    # if config and config.ultima_sync_satrack:
+    #     start = config.ultima_sync_satrack
+    # else:
+    #     start = end - timedelta(minutes=10)
 
     all_events = []
 
@@ -133,10 +144,10 @@ def obtener_eventos():
 
         try:
 
-            codes_str = ",".join([
+            codes_str = ",".join(
                 f'"{c}"'
                 for c in chunk
-            ])
+            )
 
             query = f"""
             {{
@@ -185,7 +196,7 @@ def obtener_eventos():
 
             if res.status_code != 200:
 
-                print("❌ ERROR SATRACK:")
+                print("❌ ERROR SATRACK")
                 print(res.text)
 
                 continue
@@ -205,33 +216,15 @@ def obtener_eventos():
 
         except Exception as e:
 
-            print("❌ Error request:", e)
-
-    print(f"\n📦 TOTAL EVENTOS: {len(all_events)}")
-
-    return all_events
-
-
-# =========================================
-# 🔄 SINCRONIZAR
-# =========================================
-def sincronizar_satrack():
-
-    eventos = obtener_eventos()
-
-    if not eventos:
-
-        print("⚠️ No llegaron eventos")
-
-        return []
+            print("❌ Error consultando SATRACK:", e)
 
     # =====================================
-    # 🚗 TOMAR SOLO EL EVENTO MÁS NUEVO
+    # 🚗 SOLO EL EVENTO MÁS NUEVO
     # DE CADA VEHÍCULO
     # =====================================
     ultimos_eventos = {}
 
-    for evento in eventos:
+    for evento in all_events:
 
         gps_id = evento.get("serviceCode")
 
@@ -242,248 +235,301 @@ def sincronizar_satrack():
         if not gps_id or not fecha:
             continue
 
+        evento_guardado = ultimos_eventos.get(gps_id)
+
         if (
-            gps_id not in ultimos_eventos
+            evento_guardado is None
             or fecha >
                parse_fecha(
-                   ultimos_eventos[gps_id]["recordDate"]
+                   evento_guardado.get("recordDate")
                )
         ):
             ultimos_eventos[gps_id] = evento
 
-    eventos = list(
+    eventos_finales = list(
         ultimos_eventos.values()
     )
 
     print(
-        f"🚗 Eventos finales a procesar: {len(eventos)}"
+        f"\n🚗 Eventos finales: {len(eventos_finales)}"
     )
 
-    # =====================================
-    # 🚗 VEHÍCULOS
-    # =====================================
-    vehiculos = Vehiculo.query.all()
+    return eventos_finales
 
-    vehiculos_map = {
-        v.gps_id: v
-        for v in vehiculos
-        if v.gps_id
-    }
+# # =========================================
+# # 🔄 SINCRONIZAR
+# # =========================================
+# def sincronizar_satrack():
 
-    # =====================================
-    # 📍 UBICACIONES
-    # =====================================
-    ubicaciones = VehiculoUbicacionActual.query.all()
+#     eventos = obtener_eventos()
 
-    ubicaciones_map = {
-        u.vehiculo_id: u
-        for u in ubicaciones
-    }
+#     if not eventos:
 
-    # =====================================
-    # 🧠 CACHE DUPLICADOS
-    # =====================================
-    fechas_cache = set()
+#         print("⚠️ No llegaron eventos")
 
-    # =====================================
-    # 📦 BULK INSERT
-    # =====================================
-    nuevos_trackings = []
+#         return []
 
-    actualizados = []
+#     # =====================================
+#     # 🚗 TOMAR SOLO EL EVENTO MÁS NUEVO
+#     # DE CADA VEHÍCULO
+#     # =====================================
+#     ultimos_eventos = {}
 
-    # =====================================
-    # 🔄 RECORRER EVENTOS
-    # =====================================
-    for data in eventos:
+#     for evento in eventos:
 
-        try:
+#         gps_id = evento.get("serviceCode")
 
-            if not isinstance(data, dict):
-                continue
+#         fecha = parse_fecha(
+#             evento.get("recordDate")
+#         )
 
-            gps_id = data.get("serviceCode")
+#         if not gps_id or not fecha:
+#             continue
 
-            if not gps_id:
-                continue
+#         if (
+#             gps_id not in ultimos_eventos
+#             or fecha >
+#                parse_fecha(
+#                    ultimos_eventos[gps_id]["recordDate"]
+#                )
+#         ):
+#             ultimos_eventos[gps_id] = evento
 
-            vehiculo = vehiculos_map.get(gps_id)
+#     eventos = list(
+#         ultimos_eventos.values()
+#     )
 
-            if not vehiculo:
-                continue
+#     print(
+#         f"🚗 Eventos finales a procesar: {len(eventos)}"
+#     )
 
-            fecha_gps = parse_fecha(
-                data.get("recordDate")
-            )
+#     # =====================================
+#     # 🚗 VEHÍCULOS
+#     # =====================================
+#     vehiculos = Vehiculo.query.all()
 
-            if not fecha_gps:
-                continue
+#     vehiculos_map = {
+#         v.gps_id: v
+#         for v in vehiculos
+#         if v.gps_id
+#     }
 
-            # =================================
-            # ⛔ DUPLICADOS MEMORIA
-            # =================================
-            cache_key = f"{vehiculo.id}_{fecha_gps}"
+#     # =====================================
+#     # 📍 UBICACIONES
+#     # =====================================
+#     ubicaciones = VehiculoUbicacionActual.query.all()
 
-            if cache_key in fechas_cache:
-                continue
+#     ubicaciones_map = {
+#         u.vehiculo_id: u
+#         for u in ubicaciones
+#     }
 
-            fechas_cache.add(cache_key)
+#     # =====================================
+#     # 🧠 CACHE DUPLICADOS
+#     # =====================================
+#     fechas_cache = set()
 
-            # =================================
-            # 📊 DATOS
-            # =================================
-            speed = float(data.get("speed") or 0)
+#     # =====================================
+#     # 📦 BULK INSERT
+#     # =====================================
+#     nuevos_trackings = []
 
-            ignition = bool(
-                data.get("ignition", 0)
-            )
+#     actualizados = []
 
-            descripcion = (
-                data.get("description") or ""
-            )
+#     # =====================================
+#     # 🔄 RECORRER EVENTOS
+#     # =====================================
+#     for data in eventos:
 
-            # =================================
-            # ⛔ IGNORAR EVENTOS BASURA
-            # =================================
-            if (
-                speed == 0
-                and ignition is False
-                and "Tiempo Vehículo apagado" in descripcion
-            ):
-                continue
+#         try:
 
-            # =================================
-            # 🚗 ODOMETRO SATRACK
-            # =================================
-            odometro_api = data.get("odometer")
+#             if not isinstance(data, dict):
+#                 continue
 
-            try:
-                odometro_api = float(
-                    odometro_api
-                )
-            except Exception:
-                odometro_api = None
+#             gps_id = data.get("serviceCode")
 
-            if odometro_api is not None:
+#             if not gps_id:
+#                 continue
 
-                print(
-                    f"🚗 {vehiculo.placa} | "
-                    f"Fecha GPS: {fecha_gps} | "
-                    f"Odómetro: {odometro_api}"
-                )
+#             vehiculo = vehiculos_map.get(gps_id)
 
-                # último odómetro GPS
-                vehiculo.km_gps = odometro_api
+#             if not vehiculo:
+#                 continue
 
-                # primera lectura GPS
-                if vehiculo.km_gps_inicial is None:
-                    vehiculo.km_gps_inicial = odometro_api
+#             fecha_gps = parse_fecha(
+#                 data.get("recordDate")
+#             )
 
-            # =================================
-            # 🧾 TRACKING
-            # =================================
-            tracking = VehiculoTracking(
-                vehiculo_id=vehiculo.id,
-                gps_id=gps_id,
-                latitude=data.get("latitude"),
-                longitude=data.get("longitude"),
-                speed=speed,
-                ignition=ignition,
-                direccion=data.get("direction"),
-                ciudad=data.get("town"),
-                evento=descripcion,
-                fecha_gps=fecha_gps,
-                odometro=odometro_api,
-                created_at=datetime.utcnow()
-            )
+#             if not fecha_gps:
+#                 continue
 
-            nuevos_trackings.append(
-                tracking
-            )
+#             # =================================
+#             # ⛔ DUPLICADOS MEMORIA
+#             # =================================
+#             cache_key = f"{vehiculo.id}_{fecha_gps}"
 
-            # =================================
-            # 📍 UBICACIÓN ACTUAL
-            # =================================
-            ubicacion = ubicaciones_map.get(
-                vehiculo.id
-            )
+#             if cache_key in fechas_cache:
+#                 continue
 
-            if not ubicacion:
+#             fechas_cache.add(cache_key)
 
-                ubicacion = VehiculoUbicacionActual(
-                    vehiculo_id=vehiculo.id
-                )
+#             # =================================
+#             # 📊 DATOS
+#             # =================================
+#             speed = float(data.get("speed") or 0)
 
-                db.session.add(ubicacion)
+#             ignition = bool(
+#                 data.get("ignition", 0)
+#             )
 
-                ubicaciones_map[
-                    vehiculo.id
-                ] = ubicacion
+#             descripcion = (
+#                 data.get("description") or ""
+#             )
 
-            nueva_lat = data.get("latitude")
-            nueva_lon = data.get("longitude")
+#             # =================================
+#             # ⛔ IGNORAR EVENTOS BASURA
+#             # =================================
+#             if (
+#                 speed == 0
+#                 and ignition is False
+#                 and "Tiempo Vehículo apagado" in descripcion
+#             ):
+#                 continue
 
-            cambio = (
-                ubicacion.latitude != nueva_lat
-                or ubicacion.longitude != nueva_lon
-                or ubicacion.fecha_gps != fecha_gps
-            )
+#             # =================================
+#             # 🚗 ODOMETRO SATRACK
+#             # =================================
+#             odometro_api = data.get("odometer")
 
-            if cambio:
+#             try:
+#                 odometro_api = float(
+#                     odometro_api
+#                 )
+#             except Exception:
+#                 odometro_api = None
 
-                ubicacion.gps_id = gps_id
-                ubicacion.latitude = nueva_lat
-                ubicacion.longitude = nueva_lon
-                ubicacion.speed = speed
-                ubicacion.ignition = ignition
-                ubicacion.direccion = data.get("direction")
-                ubicacion.ciudad = data.get("town")
-                ubicacion.direccion_texto = data.get("address")
-                ubicacion.evento = descripcion
-                ubicacion.fecha_gps = fecha_gps
-                ubicacion.updated_at = datetime.utcnow()
+#             if odometro_api is not None:
 
-            actualizados.append({
-                "vehiculo_id": vehiculo.id,
-                "gps_id": gps_id,
-                "km_gps": vehiculo.km_gps
-            })
+#                 print(
+#                     f"🚗 {vehiculo.placa} | "
+#                     f"Fecha GPS: {fecha_gps} | "
+#                     f"Odómetro: {odometro_api}"
+#                 )
 
-        except Exception as e:
+#                 # último odómetro GPS
+#                 vehiculo.km_gps = odometro_api
 
-            print(
-                "❌ Error procesando:",
-                e
-            )
+#                 # primera lectura GPS
+#                 if vehiculo.km_gps_inicial is None:
+#                     vehiculo.km_gps_inicial = odometro_api
 
-    # =====================================
-    # 🚀 GUARDAR
-    # =====================================
-    try:
+#             # =================================
+#             # 🧾 TRACKING
+#             # =================================
+#             tracking = VehiculoTracking(
+#                 vehiculo_id=vehiculo.id,
+#                 gps_id=gps_id,
+#                 latitude=data.get("latitude"),
+#                 longitude=data.get("longitude"),
+#                 speed=speed,
+#                 ignition=ignition,
+#                 direccion=data.get("direction"),
+#                 ciudad=data.get("town"),
+#                 evento=descripcion,
+#                 fecha_gps=fecha_gps,
+#                 odometro=odometro_api,
+#                 created_at=datetime.utcnow()
+#             )
 
-        if nuevos_trackings:
+#             nuevos_trackings.append(
+#                 tracking
+#             )
 
-            db.session.bulk_save_objects(
-                nuevos_trackings
-            )
+#             # =================================
+#             # 📍 UBICACIÓN ACTUAL
+#             # =================================
+#             ubicacion = ubicaciones_map.get(
+#                 vehiculo.id
+#             )
 
-        db.session.commit()
+#             if not ubicacion:
 
-        print(
-            f"\n🚗 VEHÍCULOS ACTUALIZADOS: {len(actualizados)}"
-        )
+#                 ubicacion = VehiculoUbicacionActual(
+#                     vehiculo_id=vehiculo.id
+#                 )
 
-        print(
-            f"📦 TRACKINGS INSERTADOS: {len(nuevos_trackings)}"
-        )
+#                 db.session.add(ubicacion)
 
-    except Exception as e:
+#                 ubicaciones_map[
+#                     vehiculo.id
+#                 ] = ubicacion
 
-        db.session.rollback()
+#             nueva_lat = data.get("latitude")
+#             nueva_lon = data.get("longitude")
 
-        print(
-            "❌ Error commit:",
-            e
-        )
+#             cambio = (
+#                 ubicacion.latitude != nueva_lat
+#                 or ubicacion.longitude != nueva_lon
+#                 or ubicacion.fecha_gps != fecha_gps
+#             )
 
-    return actualizados
+#             if cambio:
+
+#                 ubicacion.gps_id = gps_id
+#                 ubicacion.latitude = nueva_lat
+#                 ubicacion.longitude = nueva_lon
+#                 ubicacion.speed = speed
+#                 ubicacion.ignition = ignition
+#                 ubicacion.direccion = data.get("direction")
+#                 ubicacion.ciudad = data.get("town")
+#                 ubicacion.direccion_texto = data.get("address")
+#                 ubicacion.evento = descripcion
+#                 ubicacion.fecha_gps = fecha_gps
+#                 ubicacion.updated_at = datetime.utcnow()
+
+#             actualizados.append({
+#                 "vehiculo_id": vehiculo.id,
+#                 "gps_id": gps_id,
+#                 "km_gps": vehiculo.km_gps
+#             })
+
+#         except Exception as e:
+
+#             print(
+#                 "❌ Error procesando:",
+#                 e
+#             )
+
+#     # =====================================
+#     # 🚀 GUARDAR
+#     # =====================================
+#     try:
+
+#         if nuevos_trackings:
+
+#             db.session.bulk_save_objects(
+#                 nuevos_trackings
+#             )
+
+#         db.session.commit()
+
+#         print(
+#             f"\n🚗 VEHÍCULOS ACTUALIZADOS: {len(actualizados)}"
+#         )
+
+#         print(
+#             f"📦 TRACKINGS INSERTADOS: {len(nuevos_trackings)}"
+#         )
+
+#     except Exception as e:
+
+#         db.session.rollback()
+
+#         print(
+#             "❌ Error commit:",
+#             e
+#         )
+
+#     return actualizados
+
+

@@ -1002,8 +1002,8 @@ def exportar_formato_mantenimiento(vehiculo_id):
 
                 img = Image(ruta_imagen)
 
-                img.width = 80
-                img.height = 60
+                img.width = 180
+                img.height = 140
 
         # Columna J
             ws.add_image(
@@ -1047,7 +1047,7 @@ def exportar_formato_mantenimiento(vehiculo_id):
                     column=col
                 ).fill = gris
 
-        ws.row_dimensions[fila_actual].height = 300
+        ws.row_dimensions[fila_actual].height = 100
         fila_actual += 1
 
     # =================================================

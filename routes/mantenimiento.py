@@ -184,6 +184,8 @@ def crear():
         'km',
         type=int
     )
+    if km is None:
+        km = vehiculo.km_estimado
 
     fecha = request.form.get('fecha')
 
@@ -315,6 +317,13 @@ def crear():
     )
 
     db.session.add(mantenimiento)
+    # =====================================
+# RECALIBRAR KILOMETRAJE DEL VEHÍCULO
+# =====================================
+    if abs(km - vehiculo.km_estimado) > 5:
+
+        vehiculo.km_base_control = km
+        vehiculo.km_gps_inicial = vehiculo.km_gps
 # =====================================
 # ACTUALIZAR PLAN
 # =====================================
@@ -436,7 +445,10 @@ def vehiculos_simple():
                 v.tipo_vehiculo.nombre
                 if v.tipo_vehiculo
                 else None
-            )
+            ),
+            "km_estimado": v.km_estimado,
+        "km_total": v.km_total,
+        "km_gps": v.km_gps
         }
         for v in vehiculos
     ])

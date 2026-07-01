@@ -7,7 +7,7 @@ from models import (
     VehiculoCampoValor, TipoVehiculoCampo, 
 )
 from models import VehiculoUbicacionActual
-from services.satrack_service import sincronizar_satrack
+# from services.satrack_service import sincronizar_satrack
 from extensions import db
 import os
 import uuid
@@ -618,21 +618,21 @@ def ubicacion_actual():
         }), 500
 
 
-@vehiculos_bp.route('/gps', methods=['POST'])
-def recibir_gps():
+# @vehiculos_bp.route('/gps', methods=['POST'])
+# def recibir_gps():
 
-    data = request.json
+#     data = request.json
 
-    vehiculo_id = data.get('vehiculo_id')
-    latitude = data.get('latitude')
-    longitude = data.get('longitude')
-    speed = data.get('speed', 0)
-    ignition = data.get('ignition', 0)
-    fecha_gps = data.get('fecha_gps')
+#     vehiculo_id = data.get('vehiculo_id')
+#     latitude = data.get('latitude')
+#     longitude = data.get('longitude')
+#     speed = data.get('speed', 0)
+#     ignition = data.get('ignition', 0)
+#     fecha_gps = data.get('fecha_gps')
 
-    if not vehiculo_id or latitude is None or longitude is None:
-        return jsonify({"error": "datos incompletos"}), 400
+#     if not vehiculo_id or latitude is None or longitude is None:
+#         return jsonify({"error": "datos incompletos"}), 400
 
-    result = sincronizar_satrack()
+#     result = sincronizar_satrack()
 
-    return jsonify(result), 200
+#     return jsonify(result), 200

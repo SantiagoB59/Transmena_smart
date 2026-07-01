@@ -1,6 +1,10 @@
 from flask_socketio import SocketIO
 from services.satrack_service import obtener_eventos
-from models import Vehiculo, VehiculoTracking, VehiculoUbicacionActual
+from models import (
+    Vehiculo,
+    VehiculoTracking,
+    VehiculoUbicacionActual,
+)
 from extensions import db
 from datetime import datetime
 import threading
@@ -25,36 +29,69 @@ def parse_fecha(fecha_str):
 
 
 # =========================================
-# 🚗 PROCESAR VEHÍCULO (CON ODOMETRO)
+# 🚗 PROCESAR VEHÍCULO
 # =========================================
-def procesar_vehiculo(v):
+def procesar_vehiculo(v, vehiculos_map, ubicaciones_map):
+
     if not isinstance(v, dict):
         return None
 
     gps_id = v.get("serviceCode")
+
     if not gps_id:
         return None
 
-    vehiculo = Vehiculo.query.filter_by(gps_id=gps_id).first()
+    # =====================================
+    # 🚗 VEHÍCULO (CACHE)
+    # =====================================
+    vehiculo = vehiculos_map.get(gps_id)
+
     if not vehiculo:
         return None
 
-    fecha_gps = parse_fecha(v.get("recordDate"))
+    fecha_gps = parse_fecha(
+        v.get("recordDate")
+    )
 
     # =====================================
-    # 📏 ODOMETRO (CLAVE DEL SISTEMA)
+    # 📍 UBICACIÓN (CACHE)
     # =====================================
-    odometro = v.get("odometer")
+    ubicacion = ubicaciones_map.get(
+        vehiculo.id
+    )
+
+    # =====================================
+    # ⛔ Evento viejo
+    # =====================================
+    if (
+        ubicacion
+        and ubicacion.fecha_gps
+        and fecha_gps
+        and ubicacion.fecha_gps >= fecha_gps
+    ):
+        return None
+
+    # =====================================
+    # 📏 ODOMETRO
+    # =====================================
+    odometro = None
+
+    try:
+        if v.get("odometer") is not None:
+            odometro = float(v.get("odometer"))
+    except Exception:
+        pass
 
     if odometro is not None:
-        try:
-            odometro = float(odometro)
 
-            # solo actualiza si es mayor (protección contra ruido o reset)
-            if vehiculo.km_gps  is None or odometro > vehiculo.km_gps :
-                vehiculo.km_gps  = odometro
-        except:
-            pass
+        if (
+            vehiculo.km_gps is None
+            or odometro > vehiculo.km_gps
+        ):
+            vehiculo.km_gps = odometro
+
+        if vehiculo.km_gps_inicial is None:
+            vehiculo.km_gps_inicial = odometro
 
     # =====================================
     # 📜 HISTÓRICO
@@ -64,31 +101,38 @@ def procesar_vehiculo(v):
         gps_id=gps_id,
         latitude=v.get("latitude"),
         longitude=v.get("longitude"),
-        speed=v.get("speed", 0),
+        speed=float(v.get("speed") or 0),
         ignition=bool(v.get("ignition", 0)),
         direccion=v.get("direction"),
         ciudad=v.get("town"),
         evento=v.get("description"),
         fecha_gps=fecha_gps,
-        odometro=odometro  # 🔥 IMPORTANTE (si tu tabla lo tiene)
+        odometro=odometro
     )
+
     db.session.add(tracking)
 
     # =====================================
-    # 📍 UBICACIÓN ACTUAL
+    # 📍 CREAR UBICACIÓN SI NO EXISTE
     # =====================================
-    ubicacion = VehiculoUbicacionActual.query.filter_by(
-        vehiculo_id=vehiculo.id
-    ).first()
-
     if not ubicacion:
-        ubicacion = VehiculoUbicacionActual(vehiculo_id=vehiculo.id)
+
+        ubicacion = VehiculoUbicacionActual(
+            vehiculo_id=vehiculo.id
+        )
+
         db.session.add(ubicacion)
 
+        # 🔥 guardar también en el cache
+        ubicaciones_map[vehiculo.id] = ubicacion
+
+    # =====================================
+    # 📍 ACTUALIZAR UBICACIÓN
+    # =====================================
     ubicacion.gps_id = gps_id
     ubicacion.latitude = v.get("latitude")
     ubicacion.longitude = v.get("longitude")
-    ubicacion.speed = v.get("speed", 0)
+    ubicacion.speed = float(v.get("speed") or 0)
     ubicacion.ignition = bool(v.get("ignition", 0))
     ubicacion.direccion = v.get("direction")
     ubicacion.ciudad = v.get("town")
@@ -99,41 +143,92 @@ def procesar_vehiculo(v):
     return {
         "vehiculo_id": vehiculo.id,
         "gps_id": gps_id,
-        "km_actual": vehiculo.km_actual
+        "km_gps": vehiculo.km_gps,
+        "latitude": ubicacion.latitude,
+        "longitude": ubicacion.longitude,
+        "speed": ubicacion.speed,
+        "fecha_gps": (
+            fecha_gps.isoformat()
+            if fecha_gps else None
+        )
     }
-
-
 # =========================================
 # 🔄 WORKER
 # =========================================
 def worker(app):
-    with app.app_context():
-        while True:
-            try:
-                data = obtener_eventos()
-                actualizados = []
 
-                for v in data:
-                    result = procesar_vehiculo(v)
-                    if result:
-                        actualizados.append(result)
+    with app.app_context():
+
+        while True:
+
+            try:
+
+                eventos = obtener_eventos()
 
                 # =====================================
-                # 💾 UN SOLO COMMIT (OPTIMIZADO)
+                # 🚗 CARGAR VEHÍCULOS UNA SOLA VEZ
+                # =====================================
+                vehiculos = Vehiculo.query.all()
+
+                vehiculos_map = {
+                    v.gps_id: v
+                    for v in vehiculos
+                    if v.gps_id
+                }
+
+                # =====================================
+                # 📍 CARGAR UBICACIONES UNA SOLA VEZ
+                # =====================================
+                ubicaciones = VehiculoUbicacionActual.query.all()
+
+                ubicaciones_map = {
+                    u.vehiculo_id: u
+                    for u in ubicaciones
+                }
+
+                actualizados = []
+
+                # =====================================
+                # 🔄 PROCESAR EVENTOS
+                # =====================================
+                for evento in eventos:
+
+                    resultado = procesar_vehiculo(
+                        evento,
+                        vehiculos_map,
+                        ubicaciones_map
+                    )
+
+                    if resultado:
+                        actualizados.append(resultado)
+
+                # =====================================
+                # 💾 GUARDAR TODO DE UNA VEZ
                 # =====================================
                 db.session.commit()
 
                 # =====================================
-                # 📡 SOCKET UPDATE
+                # 📡 ENVIAR SOCKET
                 # =====================================
                 if actualizados:
-                    socketio.emit("vehiculos", actualizados)
 
-                print(f"🚗 Actualizados: {len(actualizados)}")
+                    socketio.emit(
+                        "vehiculos",
+                        actualizados
+                    )
+
+                print(
+                    f"✅ Vehículos actualizados: {len(actualizados)}"
+                )
 
             except Exception as e:
-                print("❌ Error worker:", e)
+
                 db.session.rollback()
+
+                print(
+                    "❌ Error Worker:",
+                    e
+                )
 
             time.sleep(30)
 
