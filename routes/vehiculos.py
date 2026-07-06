@@ -14,6 +14,8 @@ import uuid
 import json
 from sqlalchemy import or_
 
+from datetime import date, timedelta
+
 vehiculos_bp = Blueprint('vehiculos', __name__)
 
 UPLOAD_FOLDER = 'uploads/vehiculos'
@@ -184,6 +186,17 @@ def crear():
     v = Vehiculo(**{
         k: v for k, v in data.items() if k in columnas_validas
     })
+    
+    # ==========================
+    # PRÓXIMA VERIFICACIÓN KM
+    # =========================
+    from datetime import date, timedelta
+
+    v.fecha_proxima_verificacion = (
+        date.today() + timedelta(days=15)
+    )
+
+    v.requiere_verificacion_km = False
 
     # ==========================
     # IMAGEN
@@ -416,6 +429,7 @@ def stats():
         "inactivos": inactivos
     })
 
+
 # ==========================
 # ACTUALIZAR KM
 # ==========================
@@ -428,7 +442,33 @@ def actualizar_km(placa):
     if km is None:
         return jsonify({"error": "km requerido"}), 400
 
+    # ==========================
+    # Kilometraje ingresado
+    # ==========================
     v.km_actual = km
+
+    # ==========================
+    # RECALIBRAR EL SISTEMA
+    # ==========================
+    if (
+        v.km_gps is not None and
+        v.km_gps_inicial is not None and
+        v.km_base_control is not None
+    ):
+        v.km_base_control = km
+        v.km_gps_inicial = v.km_gps
+
+    # ==========================
+    # Cerrar la verificación
+    # ==========================
+    v.requiere_verificacion_km = False
+
+    v.fecha_ultima_verificacion = date.today()
+
+    v.fecha_proxima_verificacion = (
+        date.today() + timedelta(days=15)
+    )
+
     db.session.commit()
 
     return jsonify(v.to_dict())
@@ -636,3 +676,55 @@ def ubicacion_actual():
 #     result = sincronizar_satrack()
 
 #     return jsonify(result), 200
+
+
+@vehiculos_bp.route(
+    '/verificacion-km',
+    methods=['GET']
+)
+def vehiculos_pendientes_verificacion():
+
+    vehiculos = Vehiculo.query.filter_by(
+        activo=True,
+        requiere_verificacion_km=True
+    ).order_by(
+        Vehiculo.placa
+    ).all()
+
+    return jsonify([
+        {
+            "id": v.id,
+            "placa": v.placa,
+            "marca": v.marca,
+            "linea": v.linea,
+            "modelo": v.modelo,
+
+            "km_actual": v.km_actual,
+            "km_estimado": v.km_estimado,
+
+            "fecha_proxima_verificacion":
+                str(v.fecha_proxima_verificacion)
+                if v.fecha_proxima_verificacion
+                else None
+        }
+        for v in vehiculos
+    ])
+    
+    
+# ==========================
+# CANTIDAD DE VEHÍCULOS PENDIENTES DE VERIFICACIÓN
+# ==========================
+@vehiculos_bp.route(
+    '/verificacion-km/count',
+    methods=['GET']
+)
+def cantidad_pendientes_verificacion():
+
+    total = Vehiculo.query.filter_by(
+        activo=True,
+        requiere_verificacion_km=True
+    ).count()
+
+    return jsonify({
+        "total": total
+    })

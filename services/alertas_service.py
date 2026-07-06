@@ -66,6 +66,43 @@ def crear_alerta(
     alerta_existente = query.first()
 
     if alerta_existente:
+
+        hubo_cambios = False
+
+        if alerta_existente.titulo != titulo:
+            alerta_existente.titulo = titulo
+            hubo_cambios = True
+
+        if alerta_existente.mensaje != mensaje:
+            alerta_existente.mensaje = mensaje
+            hubo_cambios = True
+
+        if alerta_existente.prioridad != prioridad:
+            alerta_existente.prioridad = prioridad
+            hubo_cambios = True
+
+        if alerta_existente.metadata_json != metadata:
+            alerta_existente.metadata_json = metadata
+            hubo_cambios = True
+
+        # Actualiza la fecha del último evento
+        if hubo_cambios:
+
+            alerta_existente.fecha_evento = datetime.utcnow()
+
+            db.session.commit()
+
+            socketio.emit(
+                "alerta_actualizada",
+                alerta_existente.to_dict()
+            )
+
+            if prioridad == "CRITICA":
+                try:
+                    enviar_email_alerta(alerta_existente)
+                except Exception as e:
+                    print("Error enviando email:", e)
+
         return alerta_existente
 
     # -----------------------------------------
@@ -326,8 +363,42 @@ def generar_alertas_documentos():
                 doc.fecha_vencimiento.isoformat()
             ),
 
-            'dias_restantes': dias
-        }
+            'dias_restantes': dias,
+
+            'estado': estado
+}
+
+        # -----------------------------------------
+# MENSAJE
+# -----------------------------------------
+
+        if dias > 1:
+
+            mensaje = (
+                f"{doc.documento_tipo.nombre} vence en {dias} días"
+            )
+
+        elif dias == 1:
+
+            mensaje = (
+                f"{doc.documento_tipo.nombre} vence mañana"
+            )
+
+        elif dias == 0:
+
+            mensaje = (
+                f"{doc.documento_tipo.nombre} vence hoy"
+            )
+
+        else:
+
+            mensaje = (
+                f"{doc.documento_tipo.nombre} venció hace {abs(dias)} días"
+            )
+
+# -----------------------------------------
+# CREAR / ACTUALIZAR ALERTA
+# -----------------------------------------
 
         crear_alerta(
 
@@ -339,16 +410,12 @@ def generar_alertas_documentos():
 
             titulo=f"Documento {estado}",
 
-            mensaje=(
-                f"{doc.documento_tipo.nombre} "
-                f"vence en {dias} días"
-            ),
+            mensaje=mensaje,
 
             prioridad=prioridad,
 
             metadata=metadata
         )
-
 
 # =========================================================
 # ALERTAS GPS VELOCIDAD

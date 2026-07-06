@@ -175,6 +175,18 @@ class Vehiculo(db.Model):
         db.Integer,
         nullable=True
     )
+    requiere_verificacion_km = db.Column(
+        db.Boolean,
+        default=False
+    )
+
+    fecha_proxima_verificacion = db.Column(
+        db.Date
+    )
+    ultima_verificacion_km = db.Column(
+        db.Date,
+        nullable=True
+    )
 
     # ==========================
     # 📄 DOCUMENTOS
@@ -296,6 +308,19 @@ class Vehiculo(db.Model):
 
             "km_total":
                 self.km_total,
+            
+            "requiere_verificacion_km": self.requiere_verificacion_km,
+
+            "fecha_proxima_verificacion": (
+                str(self.fecha_proxima_verificacion)
+                if self.fecha_proxima_verificacion
+                else None
+            ),
+            "ultima_verificacion_km": (
+                str(self.ultima_verificacion_km)
+                if self.ultima_verificacion_km
+                else None
+            ),
 
             "gps_id": self.gps_id,
 
