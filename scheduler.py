@@ -49,7 +49,7 @@ def iniciar_scheduler(app):
     scheduler.add_job(
         func=lambda: ejecutar_verificacion(app),
         trigger='cron',
-        day='1,16',
+        day='6,16',
         hour=1,
         minute=0,
         id='verificacion_km',
