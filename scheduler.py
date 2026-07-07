@@ -13,7 +13,21 @@ scheduler = BackgroundScheduler(
     timezone=ZoneInfo("America/Bogota")
 )
 
+from services.alertas_service import (
+    ejecutar_motor_alertas
+)
 
+
+from datetime import datetime
+
+def ejecutar_motor(app):
+    with app.app_context():
+        print(
+            f"🚨 Motor ejecutándose: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        ejecutar_motor_alertas()
+        print("✅ Motor finalizado")
+        
 def ejecutar_verificacion(app):
     with app.app_context():
         generar_verificacion_kilometraje()
@@ -41,12 +55,20 @@ def iniciar_scheduler(app):
         id='verificacion_km',
         replace_existing=True
     )
+    scheduler.add_job(
+        func=lambda: ejecutar_motor(app),
+        trigger='interval',
+        minutes=15,
+        id='motor_alertas',
+        replace_existing=True
+    )
 
     scheduler.start()
 
     print("✅ Scheduler iniciado")
     print("📧 Reporte diario: 6:00 PM")
     print("🚗 Verificación kilometraje: 1:00 AM")
+    print("🚨 Motor de alertas: cada 15 minutos")
     
 # Ejecutar cada minuto para pruebas
 

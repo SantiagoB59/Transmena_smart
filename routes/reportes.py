@@ -231,7 +231,6 @@ def reporte_alertas():
 # =====================================================
 # EXPORTAR ALERTAS EXCEL
 # =====================================================
-
 @reportes_bp.route(
     '/alertas/excel',
     methods=['GET']
@@ -352,6 +351,14 @@ def exportar_alertas_excel():
             alerta.vehiculo_id
         )
 
+        # Si la alerta está resuelta, en el Excel la prioridad
+        # aparecerá como RESUELTA.
+        prioridad_excel = (
+            'RESUELTA'
+            if alerta.estado == 'RESUELTA'
+            else alerta.prioridad
+        )
+
         values = [
 
             alerta.id,
@@ -363,7 +370,7 @@ def exportar_alertas_excel():
 
             alerta.categoria,
 
-            alerta.prioridad,
+            prioridad_excel,
 
             alerta.estado,
 
@@ -389,7 +396,15 @@ def exportar_alertas_excel():
 
             if col_num == 5:
 
-                if value == 'CRITICA':
+                if value == 'RESUELTA':
+
+                    cell.fill = PatternFill(
+                        start_color='86EFAC',
+                        end_color='86EFAC',
+                        fill_type='solid'
+                    )
+
+                elif value == 'CRITICA':
 
                     cell.fill = PatternFill(
                         start_color='FCA5A5',
@@ -418,6 +433,28 @@ def exportar_alertas_excel():
                     cell.fill = PatternFill(
                         start_color='86EFAC',
                         end_color='86EFAC',
+                        fill_type='solid'
+                    )
+
+            # =========================================
+            # COLOR ESTADO
+            # =========================================
+
+            if col_num == 6:
+
+                if value == 'RESUELTA':
+
+                    cell.fill = PatternFill(
+                        start_color='86EFAC',
+                        end_color='86EFAC',
+                        fill_type='solid'
+                    )
+
+                elif value == 'PENDIENTE':
+
+                    cell.fill = PatternFill(
+                        start_color='FCA5A5',
+                        end_color='FCA5A5',
                         fill_type='solid'
                     )
 
@@ -464,7 +501,6 @@ def exportar_alertas_excel():
         mimetype=
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-
 # =====================================================
 # SEMÁFORO ALERTAS
 # =====================================================
@@ -587,6 +623,8 @@ def reporte_mantenimientos():
 # FORMATO PROFESIONAL MANTENIMIENTO VEHÍCULO
 # =====================================================
 
+
+
 @reportes_bp.route(
     '/mantenimiento-formato/<int:vehiculo_id>',
     methods=['GET']
@@ -594,8 +632,10 @@ def reporte_mantenimientos():
 def exportar_formato_mantenimiento(vehiculo_id):
 
     from io import BytesIO
+    import os
     from flask import send_file
     from openpyxl import Workbook
+    from openpyxl.drawing.image import Image
     from openpyxl.styles import (
         Font,
         PatternFill,
@@ -641,10 +681,6 @@ def exportar_formato_mantenimiento(vehiculo_id):
 
     ws.title = 'R. MANTENIMIENTO'
 
-    # =================================================
-    # OCULTAR GRID
-    # =================================================
-
     ws.sheet_view.showGridLines = False
 
     # =================================================
@@ -653,16 +689,18 @@ def exportar_formato_mantenimiento(vehiculo_id):
 
     columnas = {
 
-        'A': 18,
-        'B': 18,
-        'C': 18,
-        'D': 18,
-        'E': 16,
-        'F': 16,
-        'G': 18,
-        'H': 12,
-        'I': 12,
-        'J': 12
+        'A': 15,   # Fecha
+        'B': 12,   # Sistema (Reducido ya que solo llevará iniciales)
+        'C': 20,   # Descripción (Parte 1)
+        'D': 18,   # Descripción (Parte 2)
+        'E': 18,   # Descripción (Parte 3)
+        'F': 18,   # Descripción (Parte 4)
+        'G': 18,   # Insumos (Parte 1)
+        'H': 18,   # Insumos (Parte 2)
+        'I': 12,   # Responsable
+        'J': 12,   # Preventivo
+        'K': 18,   # Correctivo
+        'L': 30    # Soporte
 
     }
 
@@ -764,16 +802,11 @@ def exportar_formato_mantenimiento(vehiculo_id):
     ws.row_dimensions[3].height = 30
 
     # =================================================
-    # HEADER PRINCIPAL
+    # LOGO
     # =================================================
-
-    # =================================================
-# LOGO EMPRESA
-# =================================================
 
     ws.merge_cells('A1:B3')
 
-# Bordes y fondo para el área del logo
     for row in ws['A1:B3']:
 
         for cell in row:
@@ -781,15 +814,13 @@ def exportar_formato_mantenimiento(vehiculo_id):
             cell.fill = azul_oscuro
             cell.border = border
 
-    # Ruta logo
     logo = Image('static/logo_transmena.jpg')
 
-    # Tamaño logo
     logo.width = 260
     logo.height = 128
 
-    # Posición
     ws.add_image(logo, 'A1')
+
     ws.merge_cells('C1:G2')
 
     ws['C1'] = 'GESTIÓN DIRECCIÓN DE PROYECTOS'
@@ -804,6 +835,7 @@ def exportar_formato_mantenimiento(vehiculo_id):
     ws['C3'] = 'REPORTE DE MANTENIMIENTO VEHICULAR'
 
     ws['C3'].fill = azul_claro
+
     ws['C3'].font = Font(
         bold=True,
         size=12,
@@ -812,10 +844,6 @@ def exportar_formato_mantenimiento(vehiculo_id):
 
     ws['C3'].alignment = center
     ws['C3'].border = border
-
-    # =================================================
-    # VERSIONES
-    # =================================================
 
     info_header = [
 
@@ -834,21 +862,27 @@ def exportar_formato_mantenimiento(vehiculo_id):
         ws[cell] = texto
 
         ws[cell].fill = azul_oscuro
+
         ws[cell].font = white_bold
+
         ws[cell].alignment = center
+
         ws[cell].border = border
 
     # =================================================
-    # SECCIÓN DATOS VEHÍCULO
+    # DATOS VEHÍCULO
     # =================================================
 
-    ws.merge_cells('A5:I5')
+    ws.merge_cells('A5:K5')
 
     ws['A5'] = 'INFORMACIÓN GENERAL DEL VEHÍCULO'
 
     ws['A5'].fill = azul_oscuro
+
     ws['A5'].font = subtitulo_font
+
     ws['A5'].alignment = center
+
     ws['A5'].border = border
 
     tipo_vehiculo = ''
@@ -877,13 +911,13 @@ def exportar_formato_mantenimiento(vehiculo_id):
     posiciones = [
 
         ('A7:B7', 'C7:E7'),
-        ('F7:G7', 'H7:I7'),
+        ('F7:G7', 'H7:K7'),
 
         ('A9:B9', 'C9:E9'),
-        ('F9:G9', 'H9:I9'),
+        ('F9:G9', 'H9:K9'),
 
         ('A11:B11', 'C11:E11'),
-        ('F11:G11', 'H11:I11')
+        ('F11:G11', 'H11:K11')
 
     ]
 
@@ -891,7 +925,6 @@ def exportar_formato_mantenimiento(vehiculo_id):
 
         label, value = datos[i]
 
-        # LABEL
         ws.merge_cells(label_pos)
 
         label_cell = label_pos.split(':')[0]
@@ -899,11 +932,13 @@ def exportar_formato_mantenimiento(vehiculo_id):
         ws[label_cell] = label
 
         ws[label_cell].fill = azul_claro
+
         ws[label_cell].font = bold
+
         ws[label_cell].alignment = center
+
         ws[label_cell].border = border
 
-        # VALUE
         ws.merge_cells(value_pos)
 
         value_cell = value_pos.split(':')[0]
@@ -911,8 +946,11 @@ def exportar_formato_mantenimiento(vehiculo_id):
         ws[value_cell] = value
 
         ws[value_cell].fill = gris
+
         ws[value_cell].font = normal
+
         ws[value_cell].alignment = center
+
         ws[value_cell].border = border
 
     # =================================================
@@ -920,6 +958,10 @@ def exportar_formato_mantenimiento(vehiculo_id):
     # =================================================
 
     headers = [
+
+        'FECHA',
+        
+        'SISTEMA',
 
         'DESCRIPCIÓN DETALLADA DEL\nMANTENIMIENTO',
 
@@ -930,17 +972,29 @@ def exportar_formato_mantenimiento(vehiculo_id):
         'MANTENIMIENTO\nPREVENTIVO',
 
         'MANTENIMIENTO\nCORRECTIVO',
+
         'SOPORTE'
 
     ]
 
     merges = [
-        'A14:D15',
-        'E14:F15',
-        'G14:G15',
-        'H14:H15',
-        'I14:I15',
-        'J14:J15'
+
+        'A14:A15',   # Fecha
+
+        'B14:B15',   # Sistema
+
+        'C14:F15',   # Descripción
+
+        'G14:H15',   # Insumos
+
+        'I14:I15',   # Responsable
+
+        'J14:J15',   # Preventivo
+
+        'K14:K15',   # Correctivo
+
+        'L14:L15'    # Soporte
+
     ]
 
     for i, merge in enumerate(merges):
@@ -966,6 +1020,22 @@ def exportar_formato_mantenimiento(vehiculo_id):
     ws.row_dimensions[15].height = 38
 
     # =================================================
+    # DICCIONARIO DE CONVENCIONES (Para Iniciales)
+    # =================================================
+    mapa_sistemas = {
+        'SISTEMA DE LUBRICACIÓN': 'SL',
+        'SISTEMA DE COMBUSTIBLE': 'SC',
+        'SISTEMA ELÉCTRICO': 'SEL',
+        'SISTEMA DE FRENOS': 'SF',
+        'SISTEMA DE TRANSMISIÓN': 'ST',
+        'SISTEMA DE DIRECCIÓN': 'SD',
+        'SISTEMA DE MOTOR': 'SM',
+        'SISTEMA DE SUSPENSIÓN': 'SS',
+        'SISTEMA DE ESCAPE': 'SES',
+        'SISTEMA DE LLANTAS': 'SLL'
+    }
+
+    # =================================================
     # TABLA MANTENIMIENTOS
     # =================================================
 
@@ -973,26 +1043,127 @@ def exportar_formato_mantenimiento(vehiculo_id):
 
     for m in mantenimientos[:18]:
 
+        # =================================================
+        # FECHA DEL MANTENIMIENTO
+        # =================================================
+
+        if m.fecha:
+
+            if hasattr(m.fecha, 'strftime'):
+
+                ws[f'A{fila_actual}'] = (
+                    m.fecha.strftime('%d/%m/%Y')
+                )
+
+            else:
+
+                ws[f'A{fila_actual}'] = str(m.fecha)
+
+        else:
+
+            ws[f'A{fila_actual}'] = ''
+
+
+        # =================================================
+        # SISTEMA (Conversión automática a iniciales)
+        # =================================================
+
+        sistema_nombre = getattr(m.plan_item, 'sistema', '') or ''
+        # Limpiamos espacios y convertimos a mayúsculas para asegurar coincidencia técnica
+        sistema_key = str(sistema_nombre).strip().upper()
+        
+        # Si coincide con el diccionario ponemos la sigla, si no, dejamos el valor original
+        ws[f'B{fila_actual}'] = mapa_sistemas.get(sistema_key, sistema_nombre)
+        
+        # =================================================
+        # DESCRIPCIÓN DEL MANTENIMIENTO
+        # =================================================
+
         ws.merge_cells(
-            f'A{fila_actual}:D{fila_actual}'
+            f'C{fila_actual}:F{fila_actual}'
         )
 
-        ws[f'A{fila_actual}'] = (
-            getattr(m.plan_item, 'nombre', '')
-        )
+        descripcion = ""
+
+        if getattr(m.plan_item, 'nombre', None):
+
+            descripcion += (
+                f"{m.plan_item.nombre}"
+            )
+
+        if getattr(m, 'observaciones', None):
+
+            if descripcion:
+
+                descripcion += "\n\n"
+
+            descripcion += (
+                f"Observaciones: {m.observaciones}"
+            )
+
+        ws[f'C{fila_actual}'] = descripcion
+
+        # =================================================
+        # INSUMOS / REPUESTOS
+        # (Actualmente se usa proveedor)
+        # =================================================
 
         ws.merge_cells(
-            f'E{fila_actual}:F{fila_actual}'
-        )
-
-        ws[f'E{fila_actual}'] = (
-            str(getattr(m, 'proveedor', '') or '')
+            f'G{fila_actual}:H{fila_actual}'
         )
 
         ws[f'G{fila_actual}'] = (
-            str(getattr(m, 'responsable', '') or '')
+            str(
+                getattr(
+                    m,
+                    'proveedor',
+                    ''
+                ) or ''
+            )
         )
+
+        # =================================================
+        # RESPONSABLE
+        # =================================================
+
+        ws[f'I{fila_actual}'] = (
+            str(
+                getattr(
+                    m,
+                    'responsable',
+                    ''
+                ) or ''
+            )
+        )
+
+        # =================================================
+        # PREVENTIVO / CORRECTIVO
+        # =================================================
+
+        if (
+            str(
+                getattr(
+                    m,
+                    'type' if hasattr(m, 'type') else 'tipo', 
+                    ''
+                )
+            ).upper()
+            ==
+            'PREVENTIVO'
+        ):
+
+            ws[f'J{fila_actual}'] = '✔'
+
+        else:
+
+            ws[f'K{fila_actual}'] = '✔'
+
+        # =================================================
+        # SOPORTE
+        # =================================================
+
         if m.soporte:
+
             ruta_imagen = os.path.join(
                 os.getcwd(),
                 m.soporte
@@ -1000,26 +1171,29 @@ def exportar_formato_mantenimiento(vehiculo_id):
 
             if os.path.exists(ruta_imagen):
 
-                img = Image(ruta_imagen)
+                try:
 
-                img.width = 180
-                img.height = 140
+                    img = Image(
+                        ruta_imagen
+                    )
 
-        # Columna J
-            ws.add_image(
-                img,
-                f'J{fila_actual}'
-            )
+                    img.width = 180
+                    img.height = 140
 
-        if m.tipo == 'PREVENTIVO':
+                    ws.add_image(
+                        img,
+                        f'L{fila_actual}'
+                    )
 
-            ws[f'H{fila_actual}'] = '✔'
+                except Exception:
 
-        else:
+                    pass
 
-            ws[f'I{fila_actual}'] = '✔'
+        # =================================================
+        # ESTILOS CELDAS (A hasta L -> 1 hasta 12)
+        # =================================================
 
-        for col in range(1, 10):
+        for col in range(1, 13):
 
             cell = ws.cell(
                 row=fila_actual,
@@ -1029,34 +1203,43 @@ def exportar_formato_mantenimiento(vehiculo_id):
             cell.border = border
 
             cell.alignment = Alignment(
-                wrap_text=True,
+                horizontal='center',
                 vertical='center',
-                horizontal='center'
+                wrap_text=True
             )
 
             cell.font = normal
 
-        ws[f'A{fila_actual}'].alignment = left
+        # La descripción queda alineada a la izquierda
+        ws[f'C{fila_actual}'].alignment = left
 
+        # Fecha centrada
+        ws[f'A{fila_actual}'].alignment = center
+
+        # Colorear filas pares
         if fila_actual % 2 == 0:
 
-            for col in range(1, 10):
+            for col in range(1, 13):
 
                 ws.cell(
                     row=fila_actual,
                     column=col
                 ).fill = gris
 
-        ws.row_dimensions[fila_actual].height = 100
+        # Altura suficiente para texto + imagen
+        ws.row_dimensions[
+            fila_actual
+        ].height = 110
+
         fila_actual += 1
 
     # =================================================
-    # FILAS VACÍAS
+    # FILAS VACÍAS (Hasta columna L -> 12)
     # =================================================
 
     while fila_actual <= 34:
 
-        for col in range(1, 10):
+        for col in range(1, 13):
 
             cell = ws.cell(
                 row=fila_actual,
@@ -1066,6 +1249,8 @@ def exportar_formato_mantenimiento(vehiculo_id):
             cell.border = border
 
             cell.alignment = center
+
+            cell.font = normal
 
             if fila_actual % 2 == 0:
 
@@ -1079,7 +1264,7 @@ def exportar_formato_mantenimiento(vehiculo_id):
     # TABLA CONVENCIONES
     # =================================================
 
-    ws.merge_cells('A36:I36')
+    ws.merge_cells('A36:K36')
 
     ws['A36'] = (
         'TABLA DE CONVENCIONES - SISTEMAS DE MANTENIMIENTO'
@@ -1108,21 +1293,21 @@ def exportar_formato_mantenimiento(vehiculo_id):
     for nombre, sigla in convenciones:
 
         ws.merge_cells(
-            f'A{fila_conv}:B{fila_conv}'
+            f'A{fila_conv}:C{fila_conv}'
         )
 
         ws[f'A{fila_conv}'] = nombre
 
-        ws[f'C{fila_conv}'] = sigla
+        ws[f'D{fila_conv}'] = sigla
 
         ws[f'A{fila_conv}'].border = border
-        ws[f'C{fila_conv}'].border = border
+        ws[f'D{fila_conv}'].border = border
 
         ws[f'A{fila_conv}'].alignment = center
-        ws[f'C{fila_conv}'].alignment = center
+        ws[f'D{fila_conv}'].alignment = center
 
         ws[f'A{fila_conv}'].fill = azul_claro
-        ws[f'C{fila_conv}'].fill = gris
+        ws[f'D{fila_conv}'].fill = gris
 
         fila_conv += 1
 
@@ -1141,24 +1326,24 @@ def exportar_formato_mantenimiento(vehiculo_id):
     for nombre, sigla in convenciones2:
 
         ws.merge_cells(
-            f'F{fila_conv}:G{fila_conv}'
+            f'F{fila_conv}:H{fila_conv}'
         )
 
         ws[f'F{fila_conv}'] = nombre
 
-        ws[f'H{fila_conv}'] = sigla
+        ws[f'I{fila_conv}'] = sigla
 
         ws[f'F{fila_conv}'].border = border
-        ws[f'H{fila_conv}'].border = border
+        ws[f'I{fila_conv}'].border = border
 
         ws[f'F{fila_conv}'].alignment = center
-        ws[f'H{fila_conv}'].alignment = center
+        ws[f'I{fila_conv}'].alignment = center
 
         ws[f'F{fila_conv}'].fill = azul_claro
-        ws[f'H{fila_conv}'].fill = gris
+        ws[f'I{fila_conv}'].fill = gris
 
         fila_conv += 1
-
+        
     # =================================================
     # EXPORTAR
     # =================================================
@@ -1185,8 +1370,7 @@ def exportar_formato_mantenimiento(vehiculo_id):
             'officedocument.spreadsheetml.sheet'
         )
     )
-    
-    
+   
 @reportes_bp.route(
     '/alertas-formato/<int:vehiculo_id>',
     methods=['GET']
