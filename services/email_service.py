@@ -7,13 +7,13 @@ import os
 
 def enviar_email_alerta(alerta):
     destinatarios = [
-        "ferney.bonilla59@gmail.com",
+        "transmenasmart@gmail.com",
         "auxiliaroperaciones@transmenaycarga.com",
     ]
     
     destinatario = os.getenv(
         "ALERTA_EMAIL",
-        "ferney.bonilla59@gmail.com"
+        "transmenasmart@gmail.com"
     )
 
     color = "#dc2626"

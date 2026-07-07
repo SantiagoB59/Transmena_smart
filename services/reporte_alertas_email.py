@@ -46,12 +46,12 @@ def enviar_reporte_diario_alertas(app):
         archivo_excel = generar_excel_alertas(alertas)
 
         destinatarios = [
-        "ferney.bonilla59@gmail.com",
+        "transmenasmart@gmail.com",
         "auxiliaroperaciones@transmenaycarga.com",
         ]
         destinatario = os.getenv(
             "ALERTA_EMAIL",
-            "ferney.bonilla59@gmail.com"
+            "transmenasmart@gmail.com"
         )
 
         total = len(alertas)
