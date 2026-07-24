@@ -4,7 +4,11 @@ from models import (
     Vehiculo,
     VehiculoPlanItem,
     VehiculoDocumento,
-    VehiculoUbicacionActual
+    VehiculoUbicacionActual,
+    
+    Maquinaria,
+    MaquinariaPlanItem,
+    MaquinariaDocumento
 )
 
 from datetime import datetime, date
@@ -28,11 +32,17 @@ def crear_alerta(
     origen='SISTEMA',
 
     vehiculo_id=None,
+    maquinaria_id=None,
+
     viaje_id=None,
 
     mantenimiento_id=None,
+    maquinaria_mantenimiento_id=None,
+
     plan_item_id=None,
+
     vehiculo_plan_item_id=None,
+    maquinaria_plan_item_id=None,
 
     metadata=None
 ):
@@ -53,6 +63,21 @@ def crear_alerta(
     if vehiculo_id:
         query = query.filter_by(
             vehiculo_id=vehiculo_id
+        )
+
+    if maquinaria_id:
+        query = query.filter_by(
+            maquinaria_id=maquinaria_id
+        )
+
+    if vehiculo_plan_item_id:
+        query = query.filter_by(
+            vehiculo_plan_item_id=vehiculo_plan_item_id
+        )
+
+    if maquinaria_plan_item_id:
+        query = query.filter_by(
+            maquinaria_plan_item_id=maquinaria_plan_item_id
         )
 
     # -----------------------------------------
@@ -111,11 +136,14 @@ def crear_alerta(
     alerta = Alerta(
 
         vehiculo_id=vehiculo_id,
+        maquinaria_id=maquinaria_id,
         viaje_id=viaje_id,
 
         mantenimiento_id=mantenimiento_id,
+        maquinaria_mantenimiento_id=maquinaria_mantenimiento_id,
         plan_item_id=plan_item_id,
         vehiculo_plan_item_id=vehiculo_plan_item_id,
+        maquinaria_plan_item_id=maquinaria_plan_item_id,
 
         tipo=tipo,
         categoria=categoria,
@@ -550,8 +578,12 @@ def generar_alertas_apagado():
 def ejecutar_motor_alertas():
 
     generar_alertas_vehiculos()
+    
+    generar_alertas_maquinaria()
 
     generar_alertas_documentos()
+    
+    generar_alertas_documentos_maquinaria()
 
     generar_alertas_velocidad()
 
@@ -623,3 +655,211 @@ def obtener_estadisticas_alertas():
 
         'criticas': criticas
     }
+    
+    
+# ========================================================
+# OBTENER ALERTAS maquinaria
+# ========================================================
+def resolver_alertas_mantenimiento_maquinaria(
+    maquinaria_plan_item_id
+):
+
+    alertas = Alerta.query.filter_by(
+        tipo='MANTENIMIENTO',
+        maquinaria_plan_item_id=maquinaria_plan_item_id,
+        estado='ACTIVA'
+    ).all()
+
+    for alerta in alertas:
+
+        alerta.estado = 'RESUELTA'
+        alerta.fecha_resolucion = datetime.utcnow()
+
+        socketio.emit(
+            'alerta_resuelta',
+            alerta.to_dict()
+        )
+
+    db.session.commit()
+
+    return True
+
+
+def resolver_alertas_documento_maquinaria(
+    maquinaria_id,
+    categoria
+):
+
+    alertas = Alerta.query.filter_by(
+        tipo='DOCUMENTO',
+        categoria=categoria,
+        maquinaria_id=maquinaria_id,
+        estado='ACTIVA'
+    ).all()
+
+    for alerta in alertas:
+
+        alerta.estado = 'RESUELTA'
+        alerta.fecha_resolucion = datetime.utcnow()
+
+    db.session.commit()
+
+    return True
+
+
+
+def generar_alertas_maquinaria():
+
+    items = MaquinariaPlanItem.query.filter_by(
+        activo=True
+    ).all()
+
+    for item in items:
+
+        estado = item.calcular_estado()
+
+        if estado not in ['PENDIENTE', 'VENCIDO']:
+
+            resolver_alertas_mantenimiento_maquinaria(
+                item.id
+            )
+
+            continue
+
+        maquinaria = item.maquinaria
+
+        prioridad = (
+            'CRITICA'
+            if estado == 'VENCIDO'
+            else 'ALTA'
+        )
+
+        metadata = {
+
+            'maquinaria': maquinaria.codigo,
+
+            'plan_item': item.plan_item.nombre,
+
+            'horometro_actual': maquinaria.horometro_actual,
+
+            'ultima_horas': item.ultima_horas,
+
+            'frecuencia_horas': item.frecuencia_horas,
+
+            'estado_calculado': estado
+
+        }
+
+        crear_alerta(
+
+            tipo='MANTENIMIENTO',
+
+            categoria=estado,
+
+            maquinaria_id=maquinaria.id,
+
+            plan_item_id=item.plan_item_id,
+
+            maquinaria_plan_item_id=item.id,
+
+            titulo=f"Mantenimiento {estado}",
+
+            mensaje=(
+                f"Maquinaria {maquinaria.codigo} "
+                f"requiere mantenimiento "
+                f"{item.plan_item.nombre}"
+            ),
+
+            prioridad=prioridad,
+
+            metadata=metadata
+        )
+        
+def generar_alertas_documentos_maquinaria():
+
+    documentos = MaquinariaDocumento.query.all()
+
+    hoy = date.today()
+
+    for doc in documentos:
+
+        if not doc.fecha_vencimiento:
+            continue
+
+        dias = (
+            doc.fecha_vencimiento - hoy
+        ).days
+
+        if dias > 15:
+
+            resolver_alertas_documento_maquinaria(
+                maquinaria_id=doc.maquinaria_id,
+                categoria=doc.documento_tipo.nombre
+            )
+
+            continue
+
+        prioridad = (
+            'CRITICA'
+            if dias <= 0
+            else 'MEDIA'
+        )
+
+        estado = (
+            'VENCIDO'
+            if dias <= 0
+            else 'POR_VENCER'
+        )
+
+        metadata = {
+
+            'documento': doc.documento_tipo.nombre,
+
+            'fecha_vencimiento': doc.fecha_vencimiento.isoformat(),
+
+            'dias_restantes': dias,
+
+            'estado': estado
+
+        }
+
+        if dias > 1:
+
+            mensaje = (
+                f"{doc.documento_tipo.nombre} vence en {dias} días"
+            )
+
+        elif dias == 1:
+
+            mensaje = (
+                f"{doc.documento_tipo.nombre} vence mañana"
+            )
+
+        elif dias == 0:
+
+            mensaje = (
+                f"{doc.documento_tipo.nombre} vence hoy"
+            )
+
+        else:
+
+            mensaje = (
+                f"{doc.documento_tipo.nombre} venció hace {abs(dias)} días"
+            )
+
+        crear_alerta(
+
+            tipo='DOCUMENTO',
+
+            categoria=doc.documento_tipo.nombre,
+
+            maquinaria_id=doc.maquinaria_id,
+
+            titulo=f"Documento {estado}",
+
+            mensaje=mensaje,
+
+            prioridad=prioridad,
+
+            metadata=metadata
+        )

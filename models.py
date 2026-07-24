@@ -1262,6 +1262,28 @@ class MaquinariaPlanItem(db.Model):
             "estado": self.calcular_estado(),
 
             "activo": self.activo,
+            "sistema": (
+                self.plan_item.sistema
+                if self.plan_item else None
+            ),
+
+            "nombre": (
+                self.plan_item.nombre
+                if self.plan_item else None
+            ),
+
+            "descripcion": (
+                self.plan_item.descripcion
+                if self.plan_item else None
+            ),
+
+            "tipo_mantenimiento": (
+                self.plan_item.tipo_mantenimiento
+                if self.plan_item else None
+            ),
+
+            "tipo_control": "HORAS",
+
 
             "plan_item": (
                 self.plan_item.to_dict()
@@ -1270,9 +1292,6 @@ class MaquinariaPlanItem(db.Model):
         }
         
 
-# ==========================
-# MANTENIMIENTOS MAQUINARIA
-# ==========================
 class MaquinariaMantenimiento(db.Model):
     __tablename__ = 'maquinaria_mantenimientos'
 
@@ -1301,9 +1320,17 @@ class MaquinariaMantenimiento(db.Model):
 
     proveedor = db.Column(db.String(100))
 
+    costo = db.Column(db.Float)
+
+    lugar = db.Column(db.String(150))
+
+    responsable = db.Column(db.String(150))
+
     soporte = db.Column(db.String(255))
 
     observaciones = db.Column(db.Text)
+
+    completado = db.Column(db.Boolean, default=True)
 
     created_at = db.Column(
         db.DateTime,
@@ -1339,18 +1366,33 @@ class MaquinariaMantenimiento(db.Model):
 
             "proveedor": self.proveedor,
 
+            "costo": self.costo,
+
+            "lugar": self.lugar,
+
+            "responsable": self.responsable,
+
             "soporte": self.soporte,
 
             "observaciones": self.observaciones,
+
+            "completado": self.completado,
 
             "plan_item": (
                 self.maquinaria_plan_item.plan_item.to_dict()
                 if self.maquinaria_plan_item and self.maquinaria_plan_item.plan_item
                 else None
-            )
+            ),
+            "maquinaria": (
+                {
+                    "id": self.maquinaria.id,
+                    "codigo": self.maquinaria.codigo,
+                    "marca": self.maquinaria.marca,
+                    "modelo": self.maquinaria.modelo
+                }
+                if self.maquinaria else None
+            ),
         }
-        
-
 
 class PlanesMantenimiento(db.Model):
     __tablename__ = "planes_mantenimiento"
@@ -1645,6 +1687,24 @@ class Alerta(db.Model):
         db.DateTime,
         default=datetime.utcnow
     )
+    
+    maquinaria_id = db.Column(
+        db.Integer,
+        db.ForeignKey('maquinaria.id'),
+        nullable=True
+    )
+
+    maquinaria_mantenimiento_id = db.Column(
+        db.Integer,
+        db.ForeignKey('maquinaria_mantenimientos.id'),
+        nullable=True
+    )
+
+    maquinaria_plan_item_id = db.Column(
+        db.Integer,
+        db.ForeignKey('maquinaria_plan_item.id'),
+        nullable=True
+    )
 
     # =====================================================
     # RELACIONES SQLALCHEMY
@@ -1674,6 +1734,21 @@ class Alerta(db.Model):
         'VehiculoPlanItem',
         lazy=True
     )
+    maquinaria = db.relationship(
+        'Maquinaria',
+        lazy=True
+    )
+
+    maquinaria_mantenimiento = db.relationship(
+        'MaquinariaMantenimiento',
+        lazy=True
+    )
+
+    maquinaria_plan_item = db.relationship(
+        'MaquinariaPlanItem',
+        lazy=True
+    )
+    
 
     # =====================================================
     # SERIALIZAR
@@ -1776,6 +1851,19 @@ class Alerta(db.Model):
                 if self.viaje
                 else None
             ),
+            'maquinaria_id': self.maquinaria_id,
+
+            'maquinaria_plan_item_id': self.maquinaria_plan_item_id,
+            'maquinaria_mantenimiento_id': self.maquinaria_mantenimiento_id,
+            'maquinaria': (
+                {
+                    'id': self.maquinaria.id,
+                    'codigo': self.maquinaria.codigo,
+                    'marca': self.maquinaria.marca
+                }
+                if self.maquinaria
+                else None
+            ),
 
             # =========================================
             # PLAN ITEM
@@ -1788,7 +1876,26 @@ class Alerta(db.Model):
                 }
                 if self.plan_item
                 else None
-            )
+            ),
+            
+            'maquinaria_plan_item': (
+
+                {
+                    'id': self.maquinaria_plan_item.id,
+
+                    'plan_item_id': self.maquinaria_plan_item.plan_item_id,
+
+                    'plan_item': (
+                        self.maquinaria_plan_item.plan_item.nombre
+                        if self.maquinaria_plan_item.plan_item
+                        else None
+                    )
+                }
+
+                if self.maquinaria_plan_item
+                else None
+            ),
+            
         }
         
         

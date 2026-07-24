@@ -28,6 +28,12 @@ from models import (
     Vehiculo,
     Mantenimiento
 )
+from models import (
+    Mantenimiento,
+    MaquinariaMantenimiento,
+    Vehiculo,
+    Maquinaria
+)
 
 reportes_bp = Blueprint(
     'reportes',
@@ -165,6 +171,7 @@ border = Border(
 # =====================================================
 from datetime import datetime, time
 from flask import request, jsonify
+from models import Maquinaria
 
 @reportes_bp.route('/alertas', methods=['GET'])
 def reporte_alertas():
@@ -186,6 +193,7 @@ def reporte_alertas():
 
     categoria = request.args.get('categoria')
     vehiculo_id = request.args.get('vehiculo_id')
+    maquinaria_id = request.args.get('maquinaria_id')
 
     query = Alerta.query.filter(
         Alerta.created_at >= inicio,
@@ -207,18 +215,34 @@ def reporte_alertas():
         query = query.filter(
             Alerta.vehiculo_id == vehiculo_id
         )
+    if maquinaria_id:
+        query = query.filter(
+            Alerta.maquinaria_id == maquinaria_id
+        )
 
     alertas = query.all()
+
 
     data = []
 
     for alerta in alertas:
 
-        vehiculo = Vehiculo.query.get(alerta.vehiculo_id)
+        vehiculo = None
+        maquinaria = None
+
+        if alerta.vehiculo_id:
+            vehiculo = Vehiculo.query.get(alerta.vehiculo_id)
+
+        if alerta.maquinaria_id:
+            maquinaria = Maquinaria.query.get(alerta.maquinaria_id)
 
         data.append({
             'id': alerta.id,
-            'vehiculo': vehiculo.placa if vehiculo else None,
+            'vehiculo': (
+                vehiculo.placa
+                if vehiculo
+                else maquinaria.codigo if maquinaria else None
+            ),
             'tipo': alerta.tipo,
             'categoria': alerta.categoria,
             'prioridad': alerta.prioridad,
@@ -347,9 +371,14 @@ def exportar_alertas_excel():
 
     for alerta in alertas:
 
-        vehiculo = Vehiculo.query.get(
-            alerta.vehiculo_id
-        )
+        vehiculo = None
+        maquinaria = None
+
+        if alerta.vehiculo_id:
+            vehiculo = Vehiculo.query.get(alerta.vehiculo_id)
+
+        if alerta.maquinaria_id:
+            maquinaria = Maquinaria.query.get(alerta.maquinaria_id)
 
         # Si la alerta está resuelta, en el Excel la prioridad
         # aparecerá como RESUELTA.
@@ -364,7 +393,8 @@ def exportar_alertas_excel():
             alerta.id,
 
             vehiculo.placa
-            if vehiculo else 'N/A',
+            if vehiculo
+            else maquinaria.codigo if maquinaria else 'N/A',
 
             alerta.tipo,
 
@@ -562,63 +592,98 @@ def reporte_mantenimientos():
 
     inicio, fin = obtener_rango_fechas()
 
-    query = (
-        Mantenimiento.query
-        .filter(
-            Mantenimiento.fecha >= inicio,
-            Mantenimiento.fecha <= fin
-        )
-    )
-
-    vehiculo_id = request.args.get(
-        'vehiculo_id'
-    )
-
-    # =========================================
-    # FILTRO VEHÍCULO
-    # =========================================
-
-    if vehiculo_id:
-
-        query = query.filter(
-            Mantenimiento.vehiculo_id == vehiculo_id
-        )
-
-    mantenimientos = query.all()
+    vehiculo_id = request.args.get('vehiculo_id')
+    maquinaria_id = request.args.get('maquinaria_id')
+    tipo_activo = request.args.get('tipo_activo')
 
     data = []
 
-    for m in mantenimientos:
+    # =========================================
+    # MANTENIMIENTOS VEHÍCULOS
+    # =========================================
 
-        vehiculo = Vehiculo.query.get(
-            m.vehiculo_id
+    if tipo_activo != 'MAQUINARIA':
+
+        query = (
+            Mantenimiento.query
+            .filter(
+                Mantenimiento.fecha >= inicio,
+                Mantenimiento.fecha <= fin
+            )
         )
 
-        data.append({
+        if vehiculo_id:
+            query = query.filter(
+                Mantenimiento.vehiculo_id == vehiculo_id
+            )
 
-            'id': m.id,
+        mantenimientos = query.all()
 
-            'vehiculo':
-                vehiculo.placa
-                if vehiculo else None,
+        for m in mantenimientos:
 
-            'tipo':
-                m.tipo,
+            vehiculo = Vehiculo.query.get(m.vehiculo_id)
 
-            'fecha':
-                str(m.fecha),
+            data.append({
 
-            'km':
-                m.km,
+                'id': m.id,
+                'tipo_activo': 'VEHICULO',
+                'vehiculo': vehiculo.placa if vehiculo else None,
+                'tipo': m.tipo,
+                'fecha': str(m.fecha),
+                'km': m.km,
+                'valor': getattr(m, 'valor', None),
+                'observaciones': m.observaciones
 
-            'observaciones':
-                m.observaciones
+            })
 
-        })
+    # =========================================
+    # MANTENIMIENTOS MAQUINARIA
+    # =========================================
+
+    if tipo_activo != 'VEHICULO':
+
+        query = (
+            MaquinariaMantenimiento.query
+            .filter(
+                MaquinariaMantenimiento.fecha >= inicio,
+                MaquinariaMantenimiento.fecha <= fin
+            )
+        )
+
+        if maquinaria_id:
+            query = query.filter(
+                MaquinariaMantenimiento.maquinaria_id == maquinaria_id
+            )
+
+        mantenimientos_maquinaria = query.all()
+
+        for m in mantenimientos_maquinaria:
+
+            maquinaria = Maquinaria.query.get(m.maquinaria_id)
+
+            data.append({
+
+                'id': m.id,
+                'tipo_activo': 'MAQUINARIA',
+                'vehiculo': maquinaria.codigo if maquinaria else None,
+                'tipo': m.tipo,
+                'fecha': str(m.fecha),
+                'km': m.horas,
+                'valor': m.costo,
+                'observaciones': m.observaciones
+
+            })
+
+    # =========================================
+    # ORDENAR POR FECHA DESCENDENTE
+    # =========================================
+
+    data.sort(
+        key=lambda x: x['fecha'],
+        reverse=True
+    )
 
     return jsonify(data)
-
-
 # =====================================================
 # FORMATO PROFESIONAL MANTENIMIENTO VEHÍCULO
 # =====================================================

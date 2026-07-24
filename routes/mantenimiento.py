@@ -4,9 +4,12 @@ from werkzeug.utils import secure_filename
 from models import (
     db,
     Mantenimiento,
+    MaquinariaMantenimiento,
     Vehiculo,
+    Maquinaria,
     PlanItem,
-    VehiculoPlanItem
+    VehiculoPlanItem,
+    MaquinariaPlanItem
 )
 from models import Alerta
 
@@ -113,7 +116,7 @@ def plan_por_vehiculo(vehiculo_id):
 @mantenimientos_bp.route('', methods=['GET'])
 def listar():
 
-    vehiculo_id = request.args.get('vehiculo_id', type=int)
+    placa = request.args.get('placa', '').strip()
 
     tipo = request.args.get('tipo')
 
@@ -121,46 +124,38 @@ def listar():
 
     hasta = request.args.get('hasta')
 
-    query = Mantenimiento.query
+    # JOIN con Vehiculo
+    query = (
+        Mantenimiento.query
+        .join(Mantenimiento.vehiculo)
+        )
 
-    # ==========================
-    # FILTROS
-    # ==========================
-    if vehiculo_id:
-
-        query = query.filter_by(
-            vehiculo_id=vehiculo_id
+    if placa:
+        query = query.filter(
+            Vehiculo.placa.ilike(f'%{placa}%')
         )
 
     if tipo:
-
-        query = query.filter_by(
-            tipo=tipo
+        query = query.filter(
+            Mantenimiento.tipo == tipo
         )
 
     if desde:
-
         query = query.filter(
             Mantenimiento.fecha >= desde
         )
 
     if hasta:
-
         query = query.filter(
             Mantenimiento.fecha <= hasta
         )
-
     mantenimientos = (
         query
-        .order_by(desc(Mantenimiento.fecha))
+        .order_by(Mantenimiento.fecha.desc())
         .all()
     )
 
-    return jsonify([
-        m.to_dict()
-        for m in mantenimientos
-    ])
-
+    return jsonify([m.to_dict() for m in mantenimientos])
 # ==========================
 # CREAR
 # ==========================
@@ -468,3 +463,419 @@ def plan_items():
         p.to_dict()
         for p in items
     ])
+
+
+
+
+# =========================
+# MAQUINARIA MANTENIMIENTO
+# =========================
+
+@mantenimientos_bp.route(
+    '/maquinaria-plan/<int:maquinaria_id>',
+    methods=['GET']
+)
+def plan_por_maquinaria(maquinaria_id):
+
+    maquinaria = Maquinaria.query.get_or_404(maquinaria_id)
+
+    items = (
+        MaquinariaPlanItem.query
+        .filter_by(
+            maquinaria_id=maquinaria_id,
+            activo=True
+        )
+        .all()
+    )
+
+    resultado = []
+
+    for item in items:
+
+        ultimo = (
+            MaquinariaMantenimiento.query
+            .filter_by(
+                maquinaria_id=maquinaria_id,
+                plan_item_id=item.plan_item_id
+            )
+            .order_by(
+                MaquinariaMantenimiento.fecha.desc()
+            )
+            .first()
+        )
+
+        resultado.append({
+            "maquinaria": {
+                "id": maquinaria.id,
+                "codigo": maquinaria.codigo
+            },
+            "maquinaria_plan_item_id": item.id,
+            "plan_item": item.plan_item.to_dict(),
+            "ultimo_mantenimiento": (
+                ultimo.to_dict()
+                if ultimo else None
+            ),
+            "ultima_horas": item.ultima_horas,
+            "estado": item.calcular_estado()
+        })
+
+    return jsonify(resultado)
+
+
+# ==========================
+# CREAR MANTENIMIENTO MAQUINARIA
+# ==========================
+@mantenimientos_bp.route('/maquinaria', methods=['POST'])
+def crear_maquinaria():
+
+    # =====================================
+    # FORM DATA
+    # =====================================
+    maquinaria_id = request.form.get(
+        'maquinaria_id',
+        type=int
+    )
+
+    maquinaria_plan_item_id = request.form.get(
+        'maquinaria_plan_item_id',
+        type=int
+    )
+
+    horas = request.form.get(
+        'horas',
+        type=int
+    )
+
+    fecha = request.form.get('fecha')
+
+    tipo = request.form.get('tipo')
+
+    proveedor = request.form.get('proveedor')
+
+    observaciones = request.form.get('observaciones')
+
+    costo = request.form.get(
+        'costo',
+        type=float
+    )
+
+    lugar = request.form.get('lugar')
+
+    responsable = request.form.get('responsable')
+
+    # =====================================
+    # VALIDACIONES
+    # =====================================
+    if not maquinaria_id:
+
+        return jsonify({
+            "error": "maquinaria_id requerido"
+        }), 400
+
+    if not maquinaria_plan_item_id:
+
+        return jsonify({
+            "error": "maquinaria_plan_item_id requerido"
+        }), 400
+
+    # =====================================
+    # MAQUINARIA
+    # =====================================
+    maquinaria = Maquinaria.query.get_or_404(
+        maquinaria_id
+    )
+
+    if horas is None:
+        horas = maquinaria.horometro_actual
+
+    # =====================================
+    # PLAN
+    # =====================================
+    mpi = MaquinariaPlanItem.query.get_or_404(
+        maquinaria_plan_item_id
+    )
+
+    # =====================================
+    # SUBIR SOPORTE
+    # =====================================
+    soporte_path = None
+
+    if 'soporte' in request.files:
+
+        file = request.files['soporte']
+
+        if file and allowed_file(file.filename):
+
+            os.makedirs(
+                UPLOAD_FOLDER,
+                exist_ok=True
+            )
+
+            extension = (
+                file.filename
+                .rsplit('.', 1)[1]
+                .lower()
+            )
+
+            filename = f"{uuid.uuid4()}.{extension}"
+
+            filepath = os.path.join(
+                UPLOAD_FOLDER,
+                filename
+            )
+
+            file.save(filepath)
+
+            soporte_path = (
+                f"uploads/mantenimientos/{filename}"
+            )
+
+    # =====================================
+    # CREAR MANTENIMIENTO
+    # =====================================
+    mantenimiento = MaquinariaMantenimiento(
+
+        maquinaria_id=maquinaria.id,
+
+        maquinaria_plan_item_id=mpi.id,
+
+        plan_item_id=mpi.plan_item_id,
+
+        fecha=datetime.strptime(
+            fecha,
+            "%Y-%m-%d"
+        ).date() if fecha else None,
+
+        horas=horas,
+
+        tipo=tipo,
+
+        proveedor=proveedor,
+
+        observaciones=observaciones,
+
+        soporte=soporte_path,
+        costo=costo,
+
+        lugar=lugar,
+
+        responsable=responsable,
+        
+        completado=True
+    )
+
+    db.session.add(mantenimiento)
+
+    # =====================================
+    # ACTUALIZAR PLAN
+    # =====================================
+    mpi.ultima_horas = horas
+    mpi.ultima_fecha = mantenimiento.fecha
+    maquinaria.horometro_actual = horas
+    
+    # =====================================
+# RESOLVER ALERTAS DEL ITEM EJECUTADO
+# =====================================
+    alertas = Alerta.query.filter(
+        Alerta.tipo == "MANTENIMIENTO",
+        Alerta.estado == "ACTIVA",
+        Alerta.maquinaria_plan_item_id == mpi.id
+    ).all()
+
+    for alerta in alertas:
+
+        alerta.estado = "RESUELTA"
+        alerta.fecha_resolucion = datetime.utcnow()
+        alerta.maquinaria_mantenimiento_id = mantenimiento.id
+
+    db.session.commit()
+
+# =====================================
+# SOCKET TIEMPO REAL
+# =====================================
+    for alerta in alertas:
+
+        socketio.emit(
+            "alerta_resuelta",
+            alerta.to_dict()
+        )
+    return jsonify(
+        mantenimiento.to_dict()
+    ), 201
+    
+    
+    # ==========================
+# MAQUINARIAS SIMPLE
+# ==========================
+@mantenimientos_bp.route(
+    '/maquinarias-simple',
+    methods=['GET']
+)
+def maquinarias_simple():
+
+    maquinarias = (
+        Maquinaria.query
+        .filter_by(activo=True)
+        .all()
+    )
+
+    return jsonify([
+        {
+            "id": m.id,
+            "codigo": m.codigo,
+
+            "tipo": (
+                m.tipo_maquinaria.nombre
+                if m.tipo_maquinaria
+                else None
+            ),
+
+            "marca": m.marca,
+            "modelo": m.modelo,
+
+            "horometro_actual": (
+                m.horometro_actual or 0
+            ),
+
+            "operador": m.operador,
+
+            "estado": m.estado,
+
+            "gps_id": m.gps_id
+        }
+        for m in maquinarias
+    ])
+    
+    
+# ==========================
+# LISTAR MANTENIMIENTOS MAQUINARIA
+# ==========================
+@mantenimientos_bp.route('/maquinaria', methods=['GET'])
+def listar_maquinaria():
+
+    maquinaria_id = request.args.get(
+        'maquinaria_id',
+        type=int
+    )
+
+    tipo = request.args.get('tipo')
+
+    desde = request.args.get('desde')
+
+    hasta = request.args.get('hasta')
+
+    query = MaquinariaMantenimiento.query
+
+    # ==========================
+    # FILTROS
+    # ==========================
+    if maquinaria_id:
+
+        query = query.filter_by(
+            maquinaria_id=maquinaria_id
+        )
+
+    if tipo:
+
+        query = query.filter_by(
+            tipo=tipo
+        )
+
+    if desde:
+
+        query = query.filter(
+            MaquinariaMantenimiento.fecha >= desde
+        )
+
+    if hasta:
+
+        query = query.filter(
+            MaquinariaMantenimiento.fecha <= hasta
+        )
+
+    mantenimientos = (
+        query
+        .order_by(
+            desc(MaquinariaMantenimiento.fecha)
+        )
+        .all()
+    )
+
+    return jsonify([
+        m.to_dict()
+        for m in mantenimientos
+    ])
+    
+    
+    
+# ==========================
+# OBTENER MANTENIMIENTO MAQUINARIA
+# ==========================
+@mantenimientos_bp.route(
+    '/maquinaria/<int:id>',
+    methods=['GET']
+)
+def obtener_maquinaria(id):
+
+    mantenimiento = (
+        MaquinariaMantenimiento.query
+        .get_or_404(id)
+    )
+
+    return jsonify(
+        mantenimiento.to_dict()
+    )
+    
+    
+# ==========================
+# ACTUALIZAR MANTENIMIENTO MAQUINARIA
+# ==========================
+@mantenimientos_bp.route(
+    '/maquinaria/<int:id>',
+    methods=['PUT']
+)
+def actualizar_maquinaria(id):
+
+    mantenimiento = (
+        MaquinariaMantenimiento.query
+        .get_or_404(id)
+    )
+
+    data = request.get_json()
+
+    for key, value in data.items():
+
+        setattr(
+            mantenimiento,
+            key,
+            value
+        )
+
+    db.session.commit()
+
+    return jsonify(
+        mantenimiento.to_dict()
+    )
+    
+    
+# ==========================
+# ELIMINAR MANTENIMIENTO MAQUINARIA
+# ==========================
+@mantenimientos_bp.route(
+    '/maquinaria/<int:id>',
+    methods=['DELETE']
+)
+def eliminar_maquinaria(id):
+
+    mantenimiento = (
+        MaquinariaMantenimiento.query
+        .get_or_404(id)
+    )
+
+    db.session.delete(mantenimiento)
+
+    db.session.commit()
+
+    return jsonify({
+        "message": "Mantenimiento de maquinaria eliminado correctamente"
+    })
