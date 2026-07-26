@@ -21,6 +21,8 @@ from services.email_service import enviar_email_alerta
 # CREAR ALERTA
 # =========================================================
 
+from datetime import datetime, timedelta
+
 def crear_alerta(
     tipo,
     categoria,
@@ -49,26 +51,26 @@ def crear_alerta(
 
     """
     Evita crear alertas duplicadas ACTIVAS
+    y actualiza si ya existe
     """
 
+    # =====================================================
+    # BASE QUERY
+    # =====================================================
     query = Alerta.query.filter_by(
         tipo=tipo,
         categoria=categoria,
         estado='ACTIVA'
     )
 
-    # -----------------------------------------
-    # VEHÍCULO
-    # -----------------------------------------
+    # =====================================================
+    # FILTROS RELACIONALES (SIN DUPLICADOS)
+    # =====================================================
     if vehiculo_id:
-        query = query.filter_by(
-            vehiculo_id=vehiculo_id
-        )
+        query = query.filter_by(vehiculo_id=vehiculo_id)
 
     if maquinaria_id:
-        query = query.filter_by(
-            maquinaria_id=maquinaria_id
-        )
+        query = query.filter_by(maquinaria_id=maquinaria_id)
 
     if vehiculo_plan_item_id:
         query = query.filter_by(
@@ -80,16 +82,32 @@ def crear_alerta(
             maquinaria_plan_item_id=maquinaria_plan_item_id
         )
 
-    # -----------------------------------------
-    # PLAN ITEM
-    # -----------------------------------------
-    if vehiculo_plan_item_id:
-        query = query.filter_by(
-            vehiculo_plan_item_id=vehiculo_plan_item_id
-        )
+    # =====================================================
+    # CONTROL DE TIEMPO 🔥
+    # =====================================================
+    # Para evitar spam de alertas repetidas
+    minutos_control = 5
 
-    alerta_existente = query.first()
+    # Puedes ampliar para GPS (opcional pro)
+    if tipo == 'GPS':
+        minutos_control = 15
 
+    hace_tiempo = datetime.utcnow() - timedelta(minutes=minutos_control)
+
+    query = query.filter(
+        Alerta.created_at >= hace_tiempo
+    )
+
+    # =====================================================
+    # BUSCAR ALERTA EXISTENTE
+    # =====================================================
+    alerta_existente = query.order_by(
+        Alerta.created_at.desc()
+    ).first()
+
+    # =====================================================
+    # SI EXISTE → ACTUALIZAR
+    # =====================================================
     if alerta_existente:
 
         hubo_cambios = False
@@ -110,7 +128,7 @@ def crear_alerta(
             alerta_existente.metadata_json = metadata
             hubo_cambios = True
 
-        # Actualiza la fecha del último evento
+        # actualizar fecha si hubo cambios
         if hubo_cambios:
 
             alerta_existente.fecha_evento = datetime.utcnow()
@@ -122,6 +140,7 @@ def crear_alerta(
                 alerta_existente.to_dict()
             )
 
+            # email solo críticas
             if prioridad == "CRITICA":
                 try:
                     enviar_email_alerta(alerta_existente)
@@ -130,9 +149,9 @@ def crear_alerta(
 
         return alerta_existente
 
-    # -----------------------------------------
-    # CREAR ALERTA
-    # -----------------------------------------
+    # =====================================================
+    # CREAR NUEVA ALERTA
+    # =====================================================
     alerta = Alerta(
 
         vehiculo_id=vehiculo_id,
@@ -164,31 +183,25 @@ def crear_alerta(
     db.session.add(alerta)
     db.session.commit()
 
-    # -----------------------------------------
+    # =====================================================
     # SOCKET (TIEMPO REAL)
-    # -----------------------------------------
+    # =====================================================
     socketio.emit(
         'nueva_alerta',
         alerta.to_dict()
     )
 
-    # -----------------------------------------
-    # EMAIL (solo críticas y altas)
-    # -----------------------------------------
+    # =====================================================
+    # EMAIL (CRÍTICA / ALTA)
+    # =====================================================
     try:
-
         if prioridad in ['CRITICA', 'ALTA']:
-
             enviar_email_alerta(alerta)
-
     except Exception as e:
-
         print("Error enviando email alerta:", e)
 
     return alerta
-# =========================================================
-# RESOLVER ALERTA
-# =========================================================
+
 
 def resolver_alerta(alerta_id):
 

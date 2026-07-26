@@ -17,6 +17,8 @@ from services.alertas_service import (
     ejecutar_motor_alertas
 )
 
+import os
+
 
 from datetime import datetime
 
@@ -34,6 +36,9 @@ def ejecutar_verificacion(app):
 
 def iniciar_scheduler(app):
 
+    # 🔴 CLAVE: evitar doble ejecución en Flask DEBUG
+    if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        return
     # Evitar iniciar el scheduler dos veces
     if scheduler.running:
         print("⚠️ Scheduler ya estaba iniciado")
