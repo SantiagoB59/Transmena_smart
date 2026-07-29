@@ -64,39 +64,25 @@ def crear_alerta(
     )
 
     # =====================================================
-    # FILTROS RELACIONALES (SIN DUPLICADOS)
-    # =====================================================
-    if vehiculo_id:
+# IDENTIDAD ÚNICA DE LA ALERTA 🔥
+# =====================================================
+    if vehiculo_plan_item_id:
+        query = query.filter_by(vehiculo_plan_item_id=vehiculo_plan_item_id)
+
+    elif maquinaria_plan_item_id:
+        query = query.filter_by(maquinaria_plan_item_id=maquinaria_plan_item_id)
+
+    elif vehiculo_id:
         query = query.filter_by(vehiculo_id=vehiculo_id)
 
-    if maquinaria_id:
+    elif maquinaria_id:
         query = query.filter_by(maquinaria_id=maquinaria_id)
 
-    if vehiculo_plan_item_id:
-        query = query.filter_by(
-            vehiculo_plan_item_id=vehiculo_plan_item_id
-        )
+# opcional pero recomendado
+    if plan_item_id:
+        query = query.filter_by(plan_item_id=plan_item_id)
 
-    if maquinaria_plan_item_id:
-        query = query.filter_by(
-            maquinaria_plan_item_id=maquinaria_plan_item_id
-        )
-
-    # =====================================================
-    # CONTROL DE TIEMPO 🔥
-    # =====================================================
-    # Para evitar spam de alertas repetidas
-    minutos_control = 5
-
-    # Puedes ampliar para GPS (opcional pro)
-    if tipo == 'GPS':
-        minutos_control = 15
-
-    hace_tiempo = datetime.utcnow() - timedelta(minutes=minutos_control)
-
-    query = query.filter(
-        Alerta.created_at >= hace_tiempo
-    )
+    
 
     # =====================================================
     # BUSCAR ALERTA EXISTENTE
@@ -129,10 +115,10 @@ def crear_alerta(
             hubo_cambios = True
 
         # actualizar fecha si hubo cambios
+        # siempre refresca la alerta (aunque no cambie texto)
+        alerta_existente.fecha_evento = datetime.utcnow()
+
         if hubo_cambios:
-
-            alerta_existente.fecha_evento = datetime.utcnow()
-
             db.session.commit()
 
             socketio.emit(

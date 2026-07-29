@@ -47,7 +47,7 @@ def enviar_reporte_diario_alertas(app):
 
         destinatarios = [
         "transmenasmart@gmail.com",
-        "auxiliaroperaciones@transmenaycarga.com",
+        "auxiliaroperaciones2@transmenaycarga.com",
         "mantenimiento@transmenaycarga.com"
         ]
         destinatario = os.getenv(
