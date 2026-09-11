@@ -31,8 +31,14 @@ alertas_bp = Blueprint(
 @alertas_bp.route('/', methods=['GET'])
 def listar_alertas():
 
+    estado_vehiculo = request.args.get(
+        'estado_vehiculo'
+    )
+
     return jsonify(
-        obtener_todas_alertas()
+        obtener_todas_alertas(
+            estado_vehiculo=estado_vehiculo
+        )
     )
 
 
@@ -43,8 +49,14 @@ def listar_alertas():
 @alertas_bp.route('/activas', methods=['GET'])
 def listar_activas():
 
+    estado_vehiculo = request.args.get(
+        'estado_vehiculo'
+    )
+
     return jsonify(
-        obtener_alertas_activas()
+        obtener_alertas_activas(
+            estado_vehiculo=estado_vehiculo
+        )
     )
 
 

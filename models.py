@@ -1831,7 +1831,8 @@ class Alerta(db.Model):
                 {
                     'id': self.vehiculo.id,
                     'placa': self.vehiculo.placa,
-                    'marca': self.vehiculo.marca
+                    'marca': self.vehiculo.marca,
+                    'estado': self.vehiculo.estado
                 }
                 if self.vehiculo
                 else None
@@ -1859,7 +1860,8 @@ class Alerta(db.Model):
                 {
                     'id': self.maquinaria.id,
                     'codigo': self.maquinaria.codigo,
-                    'marca': self.maquinaria.marca
+                    'marca': self.maquinaria.marca,
+                    'estado': self.maquinaria.estado
                 }
                 if self.maquinaria
                 else None

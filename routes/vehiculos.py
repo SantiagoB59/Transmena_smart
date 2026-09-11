@@ -728,3 +728,35 @@ def cantidad_pendientes_verificacion():
     return jsonify({
         "total": total
     })
+    
+    
+@vehiculos_bp.route('/<placa>/estado', methods=['PATCH'])
+def actualizar_estado(placa):
+
+    v = Vehiculo.query.filter_by(
+        placa=placa
+    ).first_or_404()
+
+    data = request.get_json()
+
+    estado = data.get('estado')
+
+    estados_validos = [
+        'OPERATIVO',
+        'TALLER',
+        'INACTIVO'
+    ]
+
+    if estado not in estados_validos:
+        return jsonify({
+            "error": "Estado inválido"
+        }), 400
+
+    v.estado = estado
+
+    db.session.commit()
+
+    return jsonify({
+        "message": "Estado actualizado correctamente",
+        "vehiculo": v.to_dict()
+    })

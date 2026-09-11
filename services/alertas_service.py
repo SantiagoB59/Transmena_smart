@@ -275,8 +275,16 @@ def generar_alertas_vehiculos():
 
     for item in items:
 
-        estado = item.calcular_estado()
+        vehiculo = item.vehiculo
 
+        if not vehiculo:
+            continue
+
+        # No generar nuevas alertas para vehículos INACTIVOS
+        if vehiculo.estado == 'INACTIVO':
+            continue
+
+        estado = item.calcular_estado()
         # -----------------------------------------
         # SI YA NO NECESITA ALERTA
         # -----------------------------------------
@@ -349,6 +357,17 @@ def generar_alertas_documentos():
     hoy = date.today()
 
     for doc in documentos:
+
+        vehiculo = Vehiculo.query.get(
+            doc.vehiculo_id
+        )
+
+        if not vehiculo:
+            continue
+
+        # No generar nuevas alertas para vehículos INACTIVOS
+        if vehiculo.estado == 'INACTIVO':
+            continue
 
         if not doc.fecha_vencimiento:
             continue
@@ -469,6 +488,10 @@ def generar_alertas_velocidad():
         )
 
         if not vehiculo:
+                continue
+
+# No generar nuevas alertas para vehículos INACTIVOS
+        if vehiculo.estado == 'INACTIVO':
             continue
 
         prioridad = (
@@ -593,9 +616,22 @@ def ejecutar_motor_alertas():
 # OBTENER TODAS
 # =========================================================
 
-def obtener_todas_alertas():
+def obtener_todas_alertas(estado_vehiculo=None):
 
-    alertas = Alerta.query.order_by(
+    query = Alerta.query
+
+    # ==========================================
+    # FILTRAR POR ESTADO DEL VEHÍCULO
+    # ==========================================
+    if estado_vehiculo:
+        query = query.join(
+            Vehiculo,
+            Alerta.vehiculo_id == Vehiculo.id
+        ).filter(
+            Vehiculo.estado == estado_vehiculo
+        )
+
+    alertas = query.order_by(
         Alerta.created_at.desc()
     ).all()
 
@@ -603,17 +639,28 @@ def obtener_todas_alertas():
         a.to_dict()
         for a in alertas
     ]
-
-
 # =========================================================
 # OBTENER ACTIVAS
 # =========================================================
 
-def obtener_alertas_activas():
+def obtener_alertas_activas(estado_vehiculo=None):
 
-    alertas = Alerta.query.filter_by(
+    query = Alerta.query.filter_by(
         estado='ACTIVA'
-    ).order_by(
+    )
+
+    # ==========================================
+    # FILTRAR POR ESTADO DEL VEHÍCULO
+    # ==========================================
+    if estado_vehiculo:
+        query = query.join(
+            Vehiculo,
+            Alerta.vehiculo_id == Vehiculo.id
+        ).filter(
+            Vehiculo.estado == estado_vehiculo
+        )
+
+    alertas = query.order_by(
         Alerta.created_at.desc()
     ).all()
 
@@ -621,7 +668,6 @@ def obtener_alertas_activas():
         a.to_dict()
         for a in alertas
     ]
-
 
 # =========================================================
 # ESTADÍSTICAS
@@ -706,7 +752,6 @@ def resolver_alertas_documento_maquinaria(
     return True
 
 
-
 def generar_alertas_maquinaria():
 
     items = MaquinariaPlanItem.query.filter_by(
@@ -714,6 +759,15 @@ def generar_alertas_maquinaria():
     ).all()
 
     for item in items:
+
+        maquinaria = item.maquinaria
+
+        if not maquinaria:
+            continue
+
+        # Solo generar alertas si la maquinaria está OPERATIVA
+        if maquinaria.estado != 'OPERATIVO':
+            continue
 
         estado = item.calcular_estado()
 
@@ -724,8 +778,6 @@ def generar_alertas_maquinaria():
             )
 
             continue
-
-        maquinaria = item.maquinaria
 
         prioridad = (
             'CRITICA'
@@ -774,6 +826,7 @@ def generar_alertas_maquinaria():
             metadata=metadata
         )
         
+        
 def generar_alertas_documentos_maquinaria():
 
     documentos = MaquinariaDocumento.query.all()
@@ -781,6 +834,15 @@ def generar_alertas_documentos_maquinaria():
     hoy = date.today()
 
     for doc in documentos:
+
+        maquinaria = doc.maquinaria
+
+        if not maquinaria:
+            continue
+
+        # Solo generar alertas si la maquinaria está OPERATIVA
+        if maquinaria.estado != 'OPERATIVO':
+            continue
 
         if not doc.fecha_vencimiento:
             continue
