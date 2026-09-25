@@ -4,10 +4,13 @@ from models import (
     Vehiculo,
     VehiculoPlanItem,
     PlanItem,
-    Mantenimiento
+    Mantenimiento,
+    MantenimientoProgramado
+    
+    
 )
 
-from datetime import date
+from datetime import date, timedelta
 
 mantenimiento_plan_bp = Blueprint(
     'mantenimiento_plan',
@@ -163,26 +166,52 @@ def alertas():
     return jsonify(alertas)
 
 
-# =========================================
-# 📌 4. COMPLETAR MANTENIMIENTO
-# =========================================
 @mantenimiento_plan_bp.route(
     '/plan/<int:id>/completar',
     methods=['PUT']
 )
 def completar(id):
 
-    vpi = VehiculoPlanItem.query.get_or_404(
-        id
-    )
+    # =========================================
+    # 1. OBTENER PLAN DEL VEHÍCULO
+    # =========================================
 
-    vehiculo = Vehiculo.query.get(
+    vpi = VehiculoPlanItem.query.get_or_404(id)
+
+    vehiculo = Vehiculo.query.get_or_404(
         vpi.vehiculo_id
     )
 
-    km_actual = (
-        vehiculo.km_actual or 0
+    plan_item = vpi.plan_item
+
+    fecha_hoy = date.today()
+
+    km_actual = vehiculo.km_actual or 0
+
+    tipo_mantenimiento = (
+        plan_item.tipo_mantenimiento
+        if plan_item
+        else None
     )
+
+    # =========================================
+    # 2. BUSCAR PROGRAMACIÓN PENDIENTE
+    # =========================================
+
+    programado = None
+
+    if tipo_mantenimiento == 'PREVENTIVO':
+
+        programado = MantenimientoProgramado.query.filter(
+            MantenimientoProgramado.vehiculo_plan_item_id == vpi.id,
+            MantenimientoProgramado.estado == 'PROGRAMADO'
+        ).order_by(
+            MantenimientoProgramado.id.asc()
+        ).first()
+
+    # =========================================
+    # 3. CREAR MANTENIMIENTO
+    # =========================================
 
     mantenimiento = Mantenimiento(
 
@@ -192,78 +221,112 @@ def completar(id):
 
         vehiculo_plan_item_id=vpi.id,
 
-        fecha=date.today(),
+        mantenimiento_programado_id=(
+            programado.id
+            if programado
+            else None
+        ),
+
+        fecha=fecha_hoy,
 
         km=km_actual,
 
-        tipo=(
-            vpi.plan_item.tipo_mantenimiento
-            if vpi.plan_item else None
-        )
+        tipo=tipo_mantenimiento
     )
 
-    db.session.add(
-        mantenimiento
-    )
+    db.session.add(mantenimiento)
 
-    # =====================================
-    # 🔥 REINICIAR CICLO
-    # =====================================
+    # =========================================
+    # 4. MARCAR PROGRAMACIÓN COMO EJECUTADA
+    # =========================================
+
+    if programado:
+
+        programado.estado = 'EJECUTADO'
+
+        programado.fecha_ejecucion = fecha_hoy
+
+    # =========================================
+    # 5. ACTUALIZAR CICLO DEL PLAN
+    # =========================================
 
     if vpi.tipo_control == 'KM':
+
         vpi.ultimo_km = km_actual
 
-    if vpi.tipo_control == 'DIAS':
-        vpi.ultima_fecha = date.today()
+    elif vpi.tipo_control == 'DIAS':
+
+        vpi.ultima_fecha = fecha_hoy
+
+    # =========================================
+    # 6. CREAR SIGUIENTE PROGRAMACIÓN
+    # =========================================
+
+    nueva_programacion = None
+
+    if tipo_mantenimiento == 'PREVENTIVO':
+
+        nueva_programacion = MantenimientoProgramado(
+
+            vehiculo_id=vpi.vehiculo_id,
+
+            plan_item_id=vpi.plan_item_id,
+
+            vehiculo_plan_item_id=vpi.id,
+
+            estado='PROGRAMADO'
+        )
+
+        # -----------------------------------------
+        # CONTROL POR KM
+        # -----------------------------------------
+
+        if vpi.tipo_control == 'KM':
+
+            nueva_programacion.km_programado = (
+                km_actual +
+                (vpi.frecuencia_valor or 0)
+            )
+
+        # -----------------------------------------
+        # CONTROL POR DÍAS
+        # -----------------------------------------
+
+        elif vpi.tipo_control == 'DIAS':
+
+            nueva_programacion.fecha_programada = (
+                fecha_hoy +
+                timedelta(
+                    days=vpi.frecuencia_valor or 0
+                )
+            )
+
+        db.session.add(
+            nueva_programacion
+        )
+
+    # =========================================
+    # 7. GUARDAR
+    # =========================================
 
     db.session.commit()
 
     return jsonify({
-        "msg": "Mantenimiento registrado correctamente"
-    })
 
+        "msg": "Mantenimiento registrado correctamente",
 
-# =========================================
-# 📌 5. PLAN ITEMS CATÁLOGO
-# =========================================
-@mantenimiento_plan_bp.route(
-    '/plan-items',
-    methods=['GET']
-)
-def get_plan_items():
+        "mantenimiento_id": mantenimiento.id,
 
-    items = PlanItem.query.filter_by(
-        activo=True
-    ).all()
-
-    return jsonify([{
-
-        "id": i.id,
-
-        "sistema": i.sistema,
-
-        "nombre": i.nombre,
-
-        "descripcion": i.descripcion,
-
-        "tipo_mantenimiento": (
-            i.tipo_mantenimiento
+        "programacion_anterior": (
+            programado.id
+            if programado
+            else None
         ),
 
-        "tipo_control": (
-            i.tipo_control
-        ),
-
-        "frecuencia_valor": (
-            i.frecuencia_valor
-        ),
-
-        "alerta_valor": (
-            i.alerta_valor
-        ),
-
-        "obligatorio": (
-            i.obligatorio
+        "siguiente_programacion": (
+            nueva_programacion.id
+            if nueva_programacion
+            else None
         )
 
-    } for i in items])
+    }), 201

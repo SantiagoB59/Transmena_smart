@@ -785,6 +785,11 @@ class Mantenimiento(db.Model):
         db.ForeignKey('vehiculo_plan_item.id'),
         nullable=False
     )
+    mantenimiento_programado_id = db.Column(
+        db.Integer,
+        db.ForeignKey('mantenimientos_programados.id'),
+        nullable=True
+    )
 
     # ==========================
     # DATOS MANTENIMIENTO
@@ -793,7 +798,7 @@ class Mantenimiento(db.Model):
 
     km = db.Column(db.Integer, nullable=False)
 
-    tipo = db.Column(db.String(5))
+    tipo = db.Column(db.String(20))
 
     proveedor = db.Column(db.String(150))
 
@@ -1311,12 +1316,18 @@ class MaquinariaMantenimiento(db.Model):
         db.Integer,
         db.ForeignKey('maquinaria_plan_item.id')
     )
+    mantenimiento_programado_id = db.Column(
+        db.Integer,
+        db.ForeignKey('mantenimientos_programados.id'),
+        nullable=True
+    )
+    
 
     fecha = db.Column(db.Date)
 
     horas = db.Column(db.Integer)
 
-    tipo = db.Column(db.String(5))
+    tipo = db.Column(db.String(20))
 
     proveedor = db.Column(db.String(100))
 
@@ -1954,3 +1965,138 @@ class InspeccionMensual(db.Model):
             "observaciones": self.observaciones,
             "created_at": str(self.created_at)
         }
+        
+class MantenimientoProgramado(db.Model):
+    __tablename__ = 'mantenimientos_programados'
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    # =========================================
+    # EQUIPO
+    # =========================================
+
+    vehiculo_id = db.Column(
+        db.Integer,
+        db.ForeignKey('vehiculos.id'),
+        nullable=True
+    )
+
+    maquinaria_id = db.Column(
+        db.Integer,
+        db.ForeignKey('maquinaria.id'),
+        nullable=True
+    )
+
+    # =========================================
+    # PLAN
+    # =========================================
+
+    plan_item_id = db.Column(
+        db.Integer,
+        db.ForeignKey('plan_items.id'),
+        nullable=False
+    )
+
+    vehiculo_plan_item_id = db.Column(
+        db.Integer,
+        db.ForeignKey('vehiculo_plan_item.id'),
+        nullable=True
+    )
+
+    maquinaria_plan_item_id = db.Column(
+        db.Integer,
+        db.ForeignKey('maquinaria_plan_item.id'),
+        nullable=True
+    )
+
+    # =========================================
+    # PROGRAMACIÓN
+    # =========================================
+
+    fecha_programada = db.Column(
+        db.Date,
+        nullable=True
+    )
+
+    km_programado = db.Column(
+        db.Integer,
+        nullable=True
+    )
+
+    horas_programadas = db.Column(
+        db.Integer,
+        nullable=True
+    )
+
+    # =========================================
+    # ESTADO
+    # =========================================
+
+    estado = db.Column(
+        db.Enum(
+            'PROGRAMADO',
+            'EJECUTADO',
+            'VENCIDO',
+            'CANCELADO'
+        ),
+        default='PROGRAMADO',
+        nullable=False
+    )
+
+    # =========================================
+    # EJECUCIÓN
+    # =========================================
+
+
+    fecha_ejecucion = db.Column(
+        db.Date,
+        nullable=True
+    )
+
+    # =========================================
+    # FECHAS SISTEMA
+    # =========================================
+
+    created_at = db.Column(
+        db.DateTime,
+        server_default=db.func.now()
+    )
+
+    # =========================================
+    # RELACIONES
+    # =========================================
+
+    vehiculo = db.relationship(
+        'Vehiculo',
+        lazy='joined'
+    )
+
+    maquinaria = db.relationship(
+        'Maquinaria',
+        lazy='joined'
+    )
+
+    plan_item = db.relationship(
+        'PlanItem',
+        lazy='joined'
+    )
+
+    vehiculo_plan_item = db.relationship(
+        'VehiculoPlanItem',
+        lazy='joined'
+    )
+
+    maquinaria_plan_item = db.relationship(
+        'MaquinariaPlanItem',
+        lazy='joined'
+    )
+
+    mantenimiento = db.relationship(
+        'Mantenimiento',
+        lazy='joined'
+    )
+
+    maquinaria_mantenimiento = db.relationship(
+        'MaquinariaMantenimiento',
+        lazy='joined'
+    )

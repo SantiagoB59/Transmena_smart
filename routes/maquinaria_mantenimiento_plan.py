@@ -1,13 +1,13 @@
 from flask import Blueprint, request, jsonify
+from datetime import date, timedelta
+
 from models import (
     db,
     Maquinaria,
     MaquinariaPlanItem,
-    PlanItem,
-    MaquinariaMantenimiento
+    MaquinariaMantenimiento,
+    MantenimientoProgramado
 )
-
-from datetime import date
 
 maquinaria_plan_bp = Blueprint(
     'maquinaria_plan',
@@ -116,45 +116,149 @@ def alertas():
     return jsonify(response)
 
 
-# =========================================
-# COMPLETAR MANTENIMIENTO
-# =========================================
+
 @maquinaria_plan_bp.route(
     '/maquinaria/plan/<int:id>/completar',
     methods=['PUT']
 )
 def completar(id):
 
+    # =========================================
+    # 1. OBTENER PLAN DE LA MAQUINARIA
+    # =========================================
+
     mpi = MaquinariaPlanItem.query.get_or_404(id)
 
-    maquinaria = Maquinaria.query.get(
+    maquinaria = Maquinaria.query.get_or_404(
         mpi.maquinaria_id
     )
 
-    horas_actuales = maquinaria.horometro_actual or 0
+    plan_item = mpi.plan_item
+
+    fecha_hoy = date.today()
+
+    horas_actuales = (
+        maquinaria.horometro_actual or 0
+    )
+
+    tipo_mantenimiento = (
+        plan_item.tipo_mantenimiento
+        if plan_item
+        else None
+    )
+
+    # =========================================
+    # 2. BUSCAR PROGRAMACIÓN PENDIENTE
+    # =========================================
+
+    programado = None
+
+    if tipo_mantenimiento == 'PREVENTIVO':
+
+        programado = MantenimientoProgramado.query.filter(
+            MantenimientoProgramado.maquinaria_plan_item_id == mpi.id,
+            MantenimientoProgramado.estado == 'PROGRAMADO'
+        ).order_by(
+            MantenimientoProgramado.id.asc()
+        ).first()
+
+    # =========================================
+    # 3. CREAR MANTENIMIENTO
+    # =========================================
 
     mantenimiento = MaquinariaMantenimiento(
+
         maquinaria_id=mpi.maquinaria_id,
 
         maquinaria_plan_item_id=mpi.id,
 
         plan_item_id=mpi.plan_item_id,
 
-        fecha=date.today(),
+        mantenimiento_programado_id=(
+            programado.id
+            if programado
+            else None
+        ),
+
+        fecha=fecha_hoy,
 
         horas=horas_actuales,
 
-        tipo=mpi.plan_item.tipo
+        tipo=tipo_mantenimiento
     )
 
-    db.session.add(mantenimiento)
+    db.session.add(
+        mantenimiento
+    )
 
-    # 🔥 ACTUALIZAR CICLO
+    # =========================================
+    # 4. MARCAR PROGRAMACIÓN COMO EJECUTADA
+    # =========================================
+
+    if programado:
+
+        programado.estado = 'EJECUTADO'
+
+        programado.fecha_ejecucion = fecha_hoy
+
+    # =========================================
+    # 5. ACTUALIZAR CICLO
+    # =========================================
+
     mpi.ultima_horas = horas_actuales
-    mpi.ultima_fecha = date.today()
+
+    mpi.ultima_fecha = fecha_hoy
+
+    # =========================================
+    # 6. CREAR SIGUIENTE PROGRAMACIÓN
+    # =========================================
+
+    nueva_programacion = None
+
+    if tipo_mantenimiento == 'PREVENTIVO':
+
+        nueva_programacion = MantenimientoProgramado(
+
+            maquinaria_id=mpi.maquinaria_id,
+
+            plan_item_id=mpi.plan_item_id,
+
+            maquinaria_plan_item_id=mpi.id,
+
+            horas_programadas=(
+                horas_actuales +
+                (mpi.frecuencia_horas or 0)
+            ),
+
+            estado='PROGRAMADO'
+        )
+
+        db.session.add(
+            nueva_programacion
+        )
+
+    # =========================================
+    # 7. GUARDAR
+    # =========================================
 
     db.session.commit()
 
     return jsonify({
-        "message": "Mantenimiento registrado"
-    })
+
+        "message": "Mantenimiento registrado correctamente",
+
+        "mantenimiento_id": mantenimiento.id,
+
+        "programacion_anterior": (
+            programado.id
+            if programado
+            else None
+        ),
+
+        "siguiente_programacion": (
+            nueva_programacion.id
+            if nueva_programacion
+            else None
+        )
+
+    }), 201
