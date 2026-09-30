@@ -34,6 +34,7 @@ from models import (
     MaquinariaMantenimiento,
     Vehiculo,
     Maquinaria,
+    MantenimientoProgramado,
     PlanItem,
     VehiculoPlanItem,
     MaquinariaPlanItem
