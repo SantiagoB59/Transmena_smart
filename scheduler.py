@@ -46,7 +46,7 @@ def iniciar_scheduler(app):
     scheduler.add_job(
         func=lambda: enviar_reporte_diario_alertas(app),
         trigger='cron',
-        hour=18,
+        hour=21,
         minute=0,
         id='reporte_alertas_diario',
         replace_existing=True

@@ -9,7 +9,7 @@ def enviar_email_alerta(alerta):
     destinatarios = [
         "transmenasmart@gmail.com",
         "auxiliaroperaciones2@transmenaycarga.com",
-        "mantenimiento@transmenaycarga.com"
+        # "mantenimiento@transmenaycarga.com"
     ]
     
     destinatario = os.getenv(
