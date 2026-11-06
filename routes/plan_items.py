@@ -1,6 +1,4 @@
 
-from datetime import datetime
-
 from flask import Blueprint, request, jsonify
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -27,10 +25,10 @@ TIPOS_CONTROL = {
 # =========================
 def validar_articulos(data):
     """
-    Valida nombre, cantidad y fecha de vencimiento.
+    Valida nombre y cantidad mínima del catálogo.
 
-    La fecha es opcional.
-    Retorna las fechas como objetos datetime.date.
+    La fecha de vencimiento NO pertenece al catálogo: se administra
+    por vehículo en vehiculo_plan_item_detalles.
     """
 
     if not isinstance(data, list):
@@ -43,6 +41,20 @@ def validar_articulos(data):
             return None, (
                 f'El artículo {indice} debe ser un objeto válido.'
             )
+
+        # Validar id opcional (para conservar el inventario por vehículo
+        # cuando se edita el catálogo).
+        detalle_id = articulo.get('id')
+
+        if detalle_id is not None:
+            if (
+                isinstance(detalle_id, bool)
+                or not isinstance(detalle_id, int)
+                or detalle_id < 1
+            ):
+                return None, (
+                    f'El id del artículo {indice} no es válido.'
+                )
 
         # Validar nombre
         nombre = articulo.get('nombre')
@@ -65,7 +77,7 @@ def validar_articulos(data):
                 'no puede superar 150 caracteres.'
             )
 
-        # Validar cantidad
+        # Validar cantidad mínima
         cantidad = articulo.get('cantidad')
 
         if (
@@ -78,37 +90,10 @@ def validar_articulos(data):
                 'debe ser un entero mayor que cero.'
             )
 
-        # Validar fecha de vencimiento
-        fecha_valor = articulo.get('fecha_vencimiento')
-        fecha_vencimiento = None
-
-        if fecha_valor not in (None, ''):
-            if not isinstance(fecha_valor, str):
-                return None, (
-                    f'La fecha de vencimiento del artículo {indice} '
-                    'debe tener formato YYYY-MM-DD.'
-                )
-
-            try:
-                fecha_vencimiento = datetime.strptime(
-                    fecha_valor,
-                    '%Y-%m-%d'
-                ).date()
-
-                # Rechazar formatos distintos de YYYY-MM-DD.
-                if fecha_vencimiento.isoformat() != fecha_valor:
-                    raise ValueError
-
-            except ValueError:
-                return None, (
-                    f'La fecha de vencimiento del artículo {indice} '
-                    'no es válida. Usa el formato YYYY-MM-DD.'
-                )
-
         articulos_validados.append({
+            'id': detalle_id,
             'nombre': nombre,
-            'cantidad': cantidad,
-            'fecha_vencimiento': fecha_vencimiento
+            'cantidad': cantidad
         })
 
     return articulos_validados, None
@@ -271,10 +256,7 @@ def crear_plan_item():
             item.articulos.append(
                 PlanItemDetalle(
                     nombre=articulo_data['nombre'],
-                    cantidad=articulo_data['cantidad'],
-                    fecha_vencimiento=(
-                        articulo_data['fecha_vencimiento']
-                    )
+                    cantidad=articulo_data['cantidad']
                 )
             )
 
@@ -349,19 +331,80 @@ def actualizar_plan_item(id):
 
     try:
         if articulos_validados is not None:
-            # La relación delete-orphan elimina los detalles anteriores.
-            item.articulos.clear()
+            existentes = list(item.articulos)
+            existentes_por_id = {
+                detalle.id: detalle
+                for detalle in existentes
+            }
+
+            ids_enviados = [
+                articulo_data.get('id')
+                for articulo_data in articulos_validados
+                if articulo_data.get('id')
+            ]
+
+            if len(ids_enviados) != len(set(ids_enviados)):
+                return jsonify({
+                    'error': 'No se puede repetir el mismo artículo.'
+                }), 400
+
+            for detalle_id in ids_enviados:
+                if detalle_id not in existentes_por_id:
+                    return jsonify({
+                        'error': (
+                            'Uno de los artículos enviados no pertenece '
+                            'a este mantenimiento.'
+                        )
+                    }), 400
+
+            usados = set()
 
             for articulo_data in articulos_validados:
+
+                detalle = existentes_por_id.get(
+                    articulo_data.get('id')
+                )
+
+                # Compatibilidad con clientes que aún no envían id:
+                # conservar el detalle por nombre para no perder el
+                # inventario de los vehículos.
+                if not detalle:
+                    nombre_normalizado = (
+                        articulo_data['nombre'].casefold()
+                    )
+
+                    for existente in existentes:
+                        if (
+                            existente.id in usados
+                            or existente.nombre is None
+                        ):
+                            continue
+
+                        if (
+                            existente.nombre.strip().casefold()
+                            == nombre_normalizado
+                        ):
+                            detalle = existente
+                            break
+
+                if detalle:
+                    detalle.nombre = articulo_data['nombre']
+                    detalle.cantidad = articulo_data['cantidad']
+                    usados.add(detalle.id)
+                    continue
+
                 item.articulos.append(
                     PlanItemDetalle(
                         nombre=articulo_data['nombre'],
-                        cantidad=articulo_data['cantidad'],
-                        fecha_vencimiento=(
-                            articulo_data['fecha_vencimiento']
-                        )
+                        cantidad=articulo_data['cantidad']
                     )
                 )
+
+            # Solo se eliminan los artículos retirados explícitamente
+            # del catálogo.
+            for existente in existentes:
+                if existente.id not in usados:
+                    item.articulos.remove(existente)
 
         db.session.commit()
 

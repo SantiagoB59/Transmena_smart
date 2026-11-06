@@ -17,6 +17,7 @@ from routes.mantenimiento import mantenimientos_bp
 from routes.mantenimiento_plan import mantenimiento_plan_bp
 from routes.maquinaria_mantenimiento_plan import maquinaria_plan_bp
 from routes.plan_items import plan_items_bp
+from routes.inventario_vehiculo import inventario_vehiculo_bp
 from routes.sistemas import sistemas_bp
 from routes.alertas import alertas_bp
 from routes.viajes import viajes_bp
@@ -73,6 +74,7 @@ def create_app():
     app.register_blueprint(mantenimiento_plan_bp, url_prefix='/api')
     app.register_blueprint(maquinaria_plan_bp, url_prefix='/api')
     app.register_blueprint(plan_items_bp, url_prefix='/api')
+    app.register_blueprint(inventario_vehiculo_bp, url_prefix='/api')
     app.register_blueprint(sistemas_bp, url_prefix='/api')
     app.register_blueprint(alertas_bp, url_prefix='/api/alertas')
     app.register_blueprint(viajes_bp, url_prefix="/api/viajes")

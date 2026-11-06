@@ -1,6 +1,6 @@
 from extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
+from datetime import datetime, date
 
 
 # from models.alerta import Alerta
@@ -418,6 +418,17 @@ class VehiculoPlanItem(db.Model):
     vehiculo = db.relationship("Vehiculo", lazy="joined")
 
     # ==========================
+    # 📦 INVENTARIO POR VEHÍCULO
+    # ==========================
+    inventario = db.relationship(
+        "VehiculoPlanItemDetalle",
+        backref="vehiculo_plan_item",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="VehiculoPlanItemDetalle.fecha_vencimiento",
+    )
+
+    # ==========================
     # 🔥 KM TOTAL REAL
     # ==========================
 
@@ -571,6 +582,16 @@ class VehiculoPlanItem(db.Model):
             # PLAN COMPLETO
             # ==========================
             "plan_item": (self.plan_item.to_dict() if self.plan_item else None),
+            # ==========================
+            # INVENTARIO POR VEHÍCULO
+            # ==========================
+            "tiene_articulos": bool(
+                self.plan_item and self.plan_item.articulos
+            ),
+            "inventario": [
+                detalle.to_dict()
+                for detalle in self.inventario
+            ],
         }
 
 
@@ -1113,10 +1134,6 @@ class PlanItemDetalle(db.Model):
     nombre = db.Column(db.String(150), nullable=False)
 
     cantidad = db.Column(db.Integer, nullable=False, default=1)
-    fecha_vencimiento = db.Column(
-        db.Date,
-        nullable=True
-    )
 
     def to_dict(self):
         return {
@@ -1124,7 +1141,137 @@ class PlanItemDetalle(db.Model):
             "plan_item_id": self.plan_item_id,
             "nombre": self.nombre,
             "cantidad": self.cantidad,
-            "fecha_vencimiento": str(self.fecha_vencimiento) if self.fecha_vencimiento else None,
+        }
+
+
+# ==========================
+# INVENTARIO DE ARTÍCULOS POR VEHÍCULO
+# ==========================
+class VehiculoPlanItemDetalle(db.Model):
+    """
+    Artículos reales que tiene un vehículo para un mantenimiento.
+
+    El catálogo (plan_item_detalles) define el artículo y la cantidad
+    mínima. Esta tabla guarda las cantidades y vencimientos propios de
+    cada vehículo. Se permiten varios lotes del mismo artículo.
+    """
+
+    __tablename__ = "vehiculo_plan_item_detalles"
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "cantidad >= 1",
+            name="chk_vpid_cantidad",
+        ),
+    )
+
+    DIAS_ALERTA_VENCIMIENTO = 30
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    vehiculo_plan_item_id = db.Column(
+        db.Integer,
+        db.ForeignKey("vehiculo_plan_item.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    plan_item_detalle_id = db.Column(
+        db.Integer,
+        db.ForeignKey("plan_item_detalles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    cantidad = db.Column(db.Integer, nullable=False, default=1)
+
+    fecha_vencimiento = db.Column(db.Date, nullable=True)
+
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    updated_at = db.Column(
+        db.DateTime,
+        server_default=db.func.now(),
+        onupdate=db.func.now(),
+    )
+
+    # ==========================
+    # RELACIONES
+    # ==========================
+    plan_item_detalle = db.relationship("PlanItemDetalle", lazy="joined")
+
+    # ==========================
+    # ESTADO DEL VENCIMIENTO
+    # ==========================
+    def calcular_dias_restantes(self):
+        if not self.fecha_vencimiento:
+            return None
+
+        return (self.fecha_vencimiento - date.today()).days
+
+    def calcular_estado(self):
+        dias = self.calcular_dias_restantes()
+
+        if dias is None:
+            return "SIN_FECHA"
+
+        if dias < 0:
+            return "VENCIDO"
+
+        if dias <= self.DIAS_ALERTA_VENCIMIENTO:
+            return "PROXIMO"
+
+        return "VIGENTE"
+
+    # ==========================
+    # SERIALIZACIÓN
+    # ==========================
+    def to_dict(self):
+        detalle_catalogo = self.plan_item_detalle
+        vpi = self.vehiculo_plan_item
+
+        return {
+            "id": self.id,
+            "vehiculo_plan_item_id": self.vehiculo_plan_item_id,
+            "plan_item_detalle_id": self.plan_item_detalle_id,
+            "nombre": (
+                detalle_catalogo.nombre
+                if detalle_catalogo
+                else None
+            ),
+            "cantidad_minima": (
+                detalle_catalogo.cantidad
+                if detalle_catalogo
+                else None
+            ),
+            "cantidad": self.cantidad,
+            "fecha_vencimiento": (
+                str(self.fecha_vencimiento)
+                if self.fecha_vencimiento
+                else None
+            ),
+            "dias_restantes": self.calcular_dias_restantes(),
+            "estado": self.calcular_estado(),
+            "vehiculo_id": (
+                vpi.vehiculo_id
+                if vpi
+                else None
+            ),
+            "plan_item_id": (
+                vpi.plan_item_id
+                if vpi
+                else None
+            ),
+            "created_at": (
+                self.created_at.isoformat()
+                if self.created_at
+                else None
+            ),
+            "updated_at": (
+                self.updated_at.isoformat()
+                if self.updated_at
+                else None
+            ),
         }
 
 
@@ -1285,6 +1432,12 @@ class Alerta(db.Model):
         db.Integer, db.ForeignKey("vehiculo_plan_item.id"), nullable=True
     )
 
+    vehiculo_plan_item_detalle_id = db.Column(
+        db.Integer,
+        db.ForeignKey("vehiculo_plan_item_detalles.id"),
+        nullable=True,
+    )
+
     # =====================================================
     # INFORMACIÓN ALERTA
     # =====================================================
@@ -1347,6 +1500,9 @@ class Alerta(db.Model):
     plan_item = db.relationship("PlanItem", lazy=True)
 
     vehiculo_plan_item = db.relationship("VehiculoPlanItem", lazy=True)
+    vehiculo_plan_item_detalle = db.relationship(
+        "VehiculoPlanItemDetalle", lazy=True
+    )
     maquinaria = db.relationship("Maquinaria", lazy=True)
 
     maquinaria_mantenimiento = db.relationship("MaquinariaMantenimiento", lazy=True)
@@ -1369,6 +1525,9 @@ class Alerta(db.Model):
             "mantenimiento_id": self.mantenimiento_id,
             "plan_item_id": self.plan_item_id,
             "vehiculo_plan_item_id": self.vehiculo_plan_item_id,
+            "vehiculo_plan_item_detalle_id": (
+                self.vehiculo_plan_item_detalle_id
+            ),
             # =========================================
             # ALERTA
             # =========================================

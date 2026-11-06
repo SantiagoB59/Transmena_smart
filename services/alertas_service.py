@@ -3,6 +3,7 @@ from models import (
     Alerta,
     Vehiculo,
     VehiculoPlanItem,
+    VehiculoPlanItemDetalle,
     VehiculoDocumento,
     VehiculoUbicacionActual,
     
@@ -51,6 +52,8 @@ def crear_alerta(
     vehiculo_plan_item_id=None,
     maquinaria_plan_item_id=None,
 
+    vehiculo_plan_item_detalle_id=None,
+
     metadata=None
 ):
 
@@ -64,13 +67,21 @@ def crear_alerta(
     # =====================================================
     query = Alerta.query.filter_by(
         tipo=tipo,
-        categoria=categoria,
         estado='ACTIVA'
     )
 
     # =====================================================
-# IDENTIDAD ÚNICA DE LA ALERTA 🔥
-# =====================================================
+    # IDENTIDAD ÚNICA DE LA ALERTA 🔥
+    # =====================================================
+    # Para artículos/lotes la identidad es el registro exacto de
+    # inventario, sin importar si cambia de POR_VENCER a VENCIDO.
+    if vehiculo_plan_item_detalle_id:
+        query = query.filter_by(
+            vehiculo_plan_item_detalle_id=vehiculo_plan_item_detalle_id
+        )
+    else:
+        query = query.filter_by(categoria=categoria)
+
     if vehiculo_plan_item_id:
         query = query.filter_by(vehiculo_plan_item_id=vehiculo_plan_item_id)
 
@@ -102,6 +113,10 @@ def crear_alerta(
     if alerta_existente:
 
         hubo_cambios = False
+
+        if alerta_existente.categoria != categoria:
+            alerta_existente.categoria = categoria
+            hubo_cambios = True
 
         if alerta_existente.titulo != titulo:
             alerta_existente.titulo = titulo
@@ -154,6 +169,8 @@ def crear_alerta(
         plan_item_id=plan_item_id,
         vehiculo_plan_item_id=vehiculo_plan_item_id,
         maquinaria_plan_item_id=maquinaria_plan_item_id,
+
+        vehiculo_plan_item_detalle_id=vehiculo_plan_item_detalle_id,
 
         tipo=tipo,
         categoria=categoria,
@@ -243,8 +260,247 @@ def resolver_alertas_mantenimiento(
     return True
 
 # =========================================================
-# RESOLVER ALERTAS DOCUMENTOS
+# ALERTAS DE VENCIMIENTO DE ARTÍCULOS POR VEHÍCULO
 # =========================================================
+
+def resolver_alertas_articulo(
+    vehiculo_plan_item_detalle_id
+):
+
+    alertas = Alerta.query.filter_by(
+        tipo='VENCIMIENTO',
+        vehiculo_plan_item_detalle_id=vehiculo_plan_item_detalle_id,
+        estado='ACTIVA'
+    ).all()
+
+    for alerta in alertas:
+
+        alerta.estado = 'RESUELTA'
+        alerta.fecha_resolucion = datetime.utcnow()
+
+        socketio.emit(
+            'alerta_resuelta',
+            alerta.to_dict()
+        )
+
+    if alertas:
+        db.session.commit()
+
+    return True
+
+
+def evaluar_alerta_articulo(detalle):
+
+    if not detalle:
+        return None
+
+    vpi = detalle.vehiculo_plan_item
+
+    if not vpi or not vpi.vehiculo:
+
+        resolver_alertas_articulo(detalle.id)
+
+        return None
+
+    vehiculo = vpi.vehiculo
+
+    if vehiculo.estado == 'INACTIVO':
+
+        resolver_alertas_articulo(detalle.id)
+
+        return None
+
+    # -----------------------------------------
+    # SIN FECHA O VIGENTE LEJANO
+    # -----------------------------------------
+
+    if not detalle.fecha_vencimiento:
+
+        resolver_alertas_articulo(detalle.id)
+
+        return None
+
+    dias = detalle.calcular_dias_restantes()
+
+    if (
+        dias is None
+        or dias > detalle.DIAS_ALERTA_VENCIMIENTO
+    ):
+
+        resolver_alertas_articulo(detalle.id)
+
+        return None
+
+    estado = detalle.calcular_estado()
+
+    if estado not in ['PROXIMO', 'VENCIDO']:
+
+        resolver_alertas_articulo(detalle.id)
+
+        return None
+
+    plan_item = vpi.plan_item
+
+    catalogo = detalle.plan_item_detalle
+
+    nombre_articulo = (
+        catalogo.nombre
+        if catalogo
+        else 'Artículo'
+    )
+
+    nombre_mantenimiento = (
+        plan_item.nombre
+        if plan_item
+        else 'Mantenimiento'
+    )
+
+    prioridad = (
+        'CRITICA'
+        if estado == 'VENCIDO'
+        else 'MEDIA'
+    )
+
+    metadata = {
+
+        'vehiculo_id': vehiculo.id,
+
+        'vehiculo': vehiculo.placa,
+
+        'plan_item_id': vpi.plan_item_id,
+
+        'mantenimiento': nombre_mantenimiento,
+
+        'vehiculo_plan_item_id': vpi.id,
+
+        'vehiculo_plan_item_detalle_id': detalle.id,
+
+        'plan_item_detalle_id': detalle.plan_item_detalle_id,
+
+        'articulo': nombre_articulo,
+
+        'cantidad': detalle.cantidad,
+
+        'cantidad_minima': (
+            catalogo.cantidad
+            if catalogo
+            else None
+        ),
+
+        'fecha_vencimiento': (
+            detalle.fecha_vencimiento.isoformat()
+        ),
+
+        'estado': estado
+    }
+
+    # -----------------------------------------
+    # MENSAJE
+    # -----------------------------------------
+
+    if estado == 'VENCIDO':
+
+        # Mensaje estable: evita reenviar la alerta crítica cada día.
+        mensaje = (
+            f'El artículo "{nombre_articulo}" '
+            f'del vehículo {vehiculo.placa} '
+            f'({nombre_mantenimiento}) está vencido. '
+            f'Vencimiento: {detalle.fecha_vencimiento.isoformat()}.'
+        )
+
+    else:
+
+        if dias > 1:
+
+            detalle_tiempo = f"vence en {dias} días"
+
+        elif dias == 1:
+
+            detalle_tiempo = "vence mañana"
+
+        else:
+
+            detalle_tiempo = "vence hoy"
+
+        metadata['dias_restantes'] = dias
+
+        mensaje = (
+            f'El artículo "{nombre_articulo}" '
+            f'del vehículo {vehiculo.placa} '
+            f'({nombre_mantenimiento}) '
+            f'{detalle_tiempo}. '
+            f'Vencimiento: {detalle.fecha_vencimiento.isoformat()}.'
+        )
+
+    titulo = (
+        f'Artículo vencido: {nombre_articulo}'
+        if estado == 'VENCIDO'
+        else f'Artículo próximo a vencer: {nombre_articulo}'
+    )
+
+    return crear_alerta(
+
+        tipo='VENCIMIENTO',
+
+        categoria=estado,
+
+        vehiculo_id=vehiculo.id,
+
+        plan_item_id=vpi.plan_item_id,
+
+        vehiculo_plan_item_id=vpi.id,
+
+        vehiculo_plan_item_detalle_id=detalle.id,
+
+        titulo=titulo,
+
+        mensaje=mensaje,
+
+        prioridad=prioridad,
+
+        origen='INVENTARIO_VEHICULO',
+
+        metadata=metadata
+    )
+
+
+def generar_alertas_articulos_vehiculos():
+
+    detalles = (
+        VehiculoPlanItemDetalle.query
+        .join(
+            VehiculoPlanItem,
+            VehiculoPlanItemDetalle.vehiculo_plan_item_id ==
+            VehiculoPlanItem.id
+        )
+        .filter(
+            VehiculoPlanItem.activo.is_(True)
+        )
+        .all()
+    )
+
+    for detalle in detalles:
+
+        evaluar_alerta_articulo(detalle)
+
+    # Si un lote se eliminó junto con su artículo del catálogo, la FK
+    # deja la alerta sin detalle. Se resuelve para no dejar alertas
+    # activas huérfanas.
+    huerfanas = Alerta.query.filter(
+        Alerta.tipo == 'VENCIMIENTO',
+        Alerta.estado == 'ACTIVA',
+        Alerta.vehiculo_plan_item_detalle_id.is_(None),
+    ).all()
+
+    for alerta in huerfanas:
+
+        alerta.estado = 'RESUELTA'
+        alerta.fecha_resolucion = datetime.utcnow()
+
+    if huerfanas:
+        db.session.commit()
+
+    return True
 
 def resolver_alertas_documento(
     vehiculo_id,
@@ -845,6 +1101,8 @@ def ejecutar_motor_alertas():
     generar_alertas_vehiculos()
     
     generar_alertas_maquinaria()
+
+    generar_alertas_articulos_vehiculos()
 
     generar_alertas_documentos()
     
