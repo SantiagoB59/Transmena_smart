@@ -148,6 +148,44 @@ def completar(id):
     )
 
     # =========================================
+    # CORRECTIVO = ARREGLO DE UNA SOLA VEZ
+    # =========================================
+    es_correctivo = (
+        (tipo_mantenimiento or '').upper() == 'CORRECTIVO'
+    )
+
+    if es_correctivo:
+        ya_arreglado = MaquinariaMantenimiento.query.filter(
+            MaquinariaMantenimiento.completado == True,
+            MaquinariaMantenimiento.maquinaria_plan_item_id == mpi.id
+        ).order_by(
+            MaquinariaMantenimiento.id.asc()
+        ).first()
+
+        if ya_arreglado:
+            alertas = Alerta.query.filter(
+                Alerta.tipo == 'MANTENIMIENTO',
+                Alerta.estado == 'ACTIVA',
+                Alerta.maquinaria_plan_item_id == mpi.id
+            ).all()
+
+            for alerta in alertas:
+                alerta.estado = 'RESUELTA'
+                alerta.maquinaria_mantenimiento_id = ya_arreglado.id
+                alerta.fecha_resolucion = datetime.utcnow()
+
+            db.session.commit()
+
+            return jsonify({
+                "mensaje": (
+                    "El correctivo ya fue arreglado. No se crea "
+                    "una nueva ejecución por ciclo."
+                ),
+                "mantenimiento_id": ya_arreglado.id,
+                "ya_completado": True
+            }), 200
+
+    # =========================================
     # 2. BUSCAR PROGRAMACIÓN PENDIENTE
     # =========================================
 

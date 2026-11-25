@@ -121,6 +121,633 @@ def obtener_rango_fechas():
 
 
 # =====================================================
+# HELPERS INDICADOR DE MANTENIMIENTO
+# =====================================================
+
+TIPO_ALERTA_INDICADOR = 'MANTENIMIENTO'
+
+
+def obtener_rango_indicador():
+    """
+    Rango único para el indicador de pantalla y para el Excel.
+
+    Antes:
+      - pantalla: hoy - 30 días
+      - Excel: desde el día 1 del mes
+
+    Ahora ambos usan exactamente el mismo rango.
+    """
+    tipo = request.args.get('tipo', 'mensual')
+    hoy = date.today()
+
+    if tipo == 'diario':
+        return hoy, hoy
+
+    if tipo == 'semanal':
+        return hoy - timedelta(days=6), hoy
+
+    if tipo == 'mensual':
+        return hoy.replace(day=1), hoy
+
+    fecha_inicio = request.args.get('fecha_inicio')
+    fecha_fin = request.args.get('fecha_fin')
+
+    if not fecha_inicio or not fecha_fin:
+        return hoy.replace(day=1), hoy
+
+    inicio = datetime.strptime(fecha_inicio, '%Y-%m-%d').date()
+    fin = datetime.strptime(fecha_fin, '%Y-%m-%d').date()
+
+    return inicio, fin
+
+
+def _fecha_de_alerta(alerta):
+    if isinstance(alerta.created_at, datetime):
+        return alerta.created_at.date()
+    return alerta.created_at
+
+
+def existe_mantenimiento_posterior(alerta):
+    """
+    Una alerta se considera atendida solo si existe un mantenimiento
+    completado, posterior a su creación, sobre el MISMO ítem del plan.
+
+    Se consulta sin limitar por el rango del reporte: si una alerta de
+    octubre se atendió en noviembre, debe dejar de contar como pendiente.
+    """
+    fecha_alerta = _fecha_de_alerta(alerta)
+
+    if alerta.vehiculo_id:
+        return Mantenimiento.query.filter(
+            Mantenimiento.completado == True,
+            Mantenimiento.vehiculo_plan_item_id == alerta.vehiculo_plan_item_id,
+            Mantenimiento.fecha >= fecha_alerta
+        ).first() is not None
+
+    if alerta.maquinaria_id:
+        return MaquinariaMantenimiento.query.filter(
+            MaquinariaMantenimiento.completado == True,
+            MaquinariaMantenimiento.maquinaria_plan_item_id
+            == alerta.maquinaria_plan_item_id,
+            MaquinariaMantenimiento.fecha >= fecha_alerta
+        ).first() is not None
+
+    return False
+
+
+def _numero_detalle(valor):
+    """
+    Formatea kilometrajes/horas con separador de miles colombiano.
+    """
+    if valor is None:
+        return '—'
+
+    try:
+        return f"{float(valor):,.0f}".replace(',', '.')
+    except (TypeError, ValueError):
+        return str(valor)
+
+
+def serializar_alerta_pendiente(alerta):
+    """
+    Detalle legible de una alerta MANTENIMIENTO activa que todavía no
+    tiene una ejecución posterior sobre el mismo ítem del plan.
+
+    Se usa para el desplegable de "Mantenimientos pendientes" del
+    indicador HSEQ, uno por cada tipo (preventivo, correctivo,
+    inspección).
+    """
+    metadata = alerta.metadata_json or {}
+
+    vpi = (
+        VehiculoPlanItem.query.get(alerta.vehiculo_plan_item_id)
+        if alerta.vehiculo_plan_item_id
+        else None
+    )
+
+    mpi = (
+        MaquinariaPlanItem.query.get(alerta.maquinaria_plan_item_id)
+        if alerta.maquinaria_plan_item_id
+        else None
+    )
+
+    # -------------------------------------------------
+    # ACTIVO
+    # -------------------------------------------------
+
+    if alerta.vehiculo_id:
+        tipo_activo = 'VEHICULO'
+        nombre_activo = (
+            alerta.vehiculo.placa
+            if alerta.vehiculo
+            else metadata.get('vehiculo')
+        )
+
+    elif alerta.maquinaria_id:
+        tipo_activo = 'MAQUINARIA'
+        nombre_activo = (
+            alerta.maquinaria.codigo
+            if alerta.maquinaria
+            else metadata.get('maquinaria')
+        )
+
+    else:
+        tipo_activo = None
+        nombre_activo = None
+
+    plan = alerta.plan_item
+
+    mantenimiento = (
+        plan.nombre if plan else metadata.get('plan_item')
+    )
+
+    sistema = plan.sistema if plan else None
+
+    # -------------------------------------------------
+    # CONTROL (KM / DIAS / HORAS)
+    # -------------------------------------------------
+
+    control = None
+    ultimo = None
+    actual = None
+    programado = None
+    restante = None
+    unidad = ''
+    detalle_control = 'Sin control parametrizado'
+
+    if vpi:
+        control = vpi.tipo_control
+        ultimo = vpi.ultimo_km
+        actual = (
+            vpi.vehiculo.km_estimado
+            if vpi.vehiculo
+            else metadata.get('km_actual')
+        )
+        programado = vpi.calcular_programado()
+        restante = vpi.calcular_restante()
+
+        if control == 'KM':
+            unidad = 'km'
+            detalle_control = (
+                f"Último KM: {_numero_detalle(ultimo)} · "
+                f"KM actual: {_numero_detalle(actual)} · "
+                f"Programado: {_numero_detalle(programado)} km · "
+                f"Restante: {_numero_detalle(restante)} km"
+            )
+
+        elif control == 'DIAS':
+            unidad = 'días'
+            detalle_control = (
+                f"Última fecha: {vpi.ultima_fecha} · "
+                f"Frecuencia: {_numero_detalle(vpi.frecuencia_valor)} días · "
+                f"Programado: {programado} · "
+                f"Restante: {_numero_detalle(restante)} días"
+            )
+
+    elif mpi:
+        control = 'HORAS'
+        ultimo = mpi.ultima_horas
+        actual = (
+            mpi.maquinaria.horometro_actual
+            if mpi.maquinaria
+            else None
+        )
+        programado = mpi.calcular_horas_programadas()
+        restante = mpi.calcular_horas_restantes()
+        unidad = 'h'
+        detalle_control = (
+            f"Últimas horas: {_numero_detalle(ultimo)} · "
+            f"Horómetro actual: {_numero_detalle(actual)} · "
+            f"Programado: {_numero_detalle(programado)} h · "
+            f"Restante: {_numero_detalle(restante)} h"
+        )
+
+    # -------------------------------------------------
+    # FECHAS
+    # -------------------------------------------------
+
+    if isinstance(alerta.created_at, datetime):
+        fecha_reporte = alerta.created_at.date().isoformat()
+        dias_pendiente = (
+            date.today() - alerta.created_at.date()
+        ).days
+    else:
+        fecha_reporte = str(alerta.created_at)
+        dias_pendiente = None
+
+    if hasattr(programado, 'isoformat'):
+        programado = programado.isoformat()
+
+    return {
+        'alerta_id': alerta.id,
+        'tipo_activo': tipo_activo,
+        'activo': nombre_activo,
+        'sistema': sistema,
+        'mantenimiento': mantenimiento,
+        'categoria': alerta.categoria,
+        'prioridad': alerta.prioridad,
+        'estado': alerta.estado,
+        'fecha_reporte': fecha_reporte,
+        'dias_pendiente': dias_pendiente,
+        'control': control,
+        'ultimo': ultimo,
+        'actual': actual,
+        'programado': programado,
+        'restante': restante,
+        'unidad': unidad,
+        'detalle_control': detalle_control,
+        'mensaje': alerta.mensaje,
+    }
+
+
+def _fecha_registro(valor):
+    if valor is None:
+        return None
+
+    if isinstance(valor, datetime):
+        return valor.date().isoformat()
+
+    if hasattr(valor, 'isoformat'):
+        return valor.isoformat()
+
+    return str(valor)
+
+
+# Mapa único de tipos: se usa en pantalla y en Excel para que cada
+# indicador reciba exactamente los registros de su tipo.
+TIPO_MANTENIMIENTO_INDICADOR = {
+
+    'PREVENTIVO': 'preventivo',
+    'PR': 'preventivo',
+
+    'CORRECTIVO': 'correctivo',
+    'COR': 'correctivo',
+    'CO': 'correctivo',
+
+    'INSPECCION': 'inspecciones',
+    'INSPECCIÓN': 'inspecciones',
+    'INS': 'inspecciones',
+    'I': 'inspecciones'
+}
+
+
+def serializar_registro_indicador(registro, origen):
+    """
+    Serializa una alerta o un mantenimiento para el detalle de registros
+    por tipo de mantenimiento.
+
+    origen = 'ALERTA' | 'MANTENIMIENTO'
+    """
+    es_alerta = origen == 'ALERTA'
+
+    metadata = (
+        registro.metadata_json or {}
+        if es_alerta
+        else {}
+    )
+
+    plan = getattr(registro, 'plan_item', None)
+
+    if plan is None:
+        vpi = getattr(registro, 'vehiculo_plan_item', None)
+        mpi = getattr(registro, 'maquinaria_plan_item', None)
+
+        if vpi and vpi.plan_item:
+            plan = vpi.plan_item
+        elif mpi and mpi.plan_item:
+            plan = mpi.plan_item
+
+    # -------------------------------------------------
+    # ACTIVO
+    # -------------------------------------------------
+
+    if getattr(registro, 'vehiculo_id', None):
+        tipo_activo = 'VEHICULO'
+        activo = (
+            registro.vehiculo.placa
+            if getattr(registro, 'vehiculo', None)
+            else metadata.get('vehiculo')
+        )
+
+    elif getattr(registro, 'maquinaria_id', None):
+        tipo_activo = 'MAQUINARIA'
+        activo = (
+            registro.maquinaria.codigo
+            if getattr(registro, 'maquinaria', None)
+            else metadata.get('maquinaria')
+        )
+
+    else:
+        tipo_activo = None
+        activo = None
+
+    # -------------------------------------------------
+    # TIPO / FECHA / ESTADO
+    # -------------------------------------------------
+
+    if es_alerta:
+        tipo = (
+            plan.tipo_mantenimiento
+            if plan
+            else (
+                (metadata.get('tipo') or '').upper()
+            )
+        )
+        fecha = registro.created_at
+        estado = registro.estado
+        categoria = registro.categoria
+        prioridad = registro.prioridad
+        completado = registro.estado == 'RESUELTA'
+        descripcion = registro.mensaje or registro.titulo
+        detalle_control = serializar_alerta_pendiente(
+            registro
+        )['detalle_control']
+
+    else:
+        tipo = (registro.tipo or '').upper()
+        fecha = registro.fecha
+        estado = (
+            'COMPLETADO'
+            if registro.completado
+            else 'PENDIENTE'
+        )
+        categoria = None
+        prioridad = None
+        completado = bool(registro.completado)
+        descripcion = registro.observaciones
+        detalle_control = (
+            f"KM: {_numero_detalle(getattr(registro, 'km', None))} · "
+            f"Horas: {_numero_detalle(getattr(registro, 'horas', None))}"
+        )
+
+    return {
+
+        'origen': origen,
+        'id': registro.id,
+
+        'fecha': _fecha_registro(fecha),
+
+        'tipo_activo': tipo_activo,
+        'activo': activo,
+
+        'sistema': (
+            plan.sistema if plan else metadata.get('sistema')
+        ),
+        'mantenimiento': (
+            plan.nombre if plan else metadata.get('plan_item')
+        ),
+        'tipo': tipo,
+
+        'estado': estado,
+        'categoria': categoria,
+        'prioridad': prioridad,
+        'completado': completado,
+
+        'km': (
+            getattr(registro, 'km', None)
+            if not es_alerta
+            else (metadata.get('km_actual') or metadata.get('km_estimado'))
+        ),
+        'horas': (
+            getattr(registro, 'horas', None)
+            if not es_alerta
+            else metadata.get('horas_actuales')
+        ),
+
+        'proveedor': (
+            getattr(registro, 'proveedor', None)
+            if not es_alerta
+            else None
+        ),
+        'costo': (
+            getattr(registro, 'costo', None)
+            if not es_alerta
+            else None
+        ),
+        'lugar': (
+            getattr(registro, 'lugar', None)
+            if not es_alerta
+            else None
+        ),
+        'responsable': (
+            getattr(registro, 'responsable', None)
+            if not es_alerta
+            else None
+        ),
+        'observaciones': (
+            registro.observaciones
+            if not es_alerta
+            else None
+        ),
+        'soporte': (
+            getattr(registro, 'soporte', None)
+            if not es_alerta
+            else None
+        ),
+
+        'descripcion': descripcion,
+        'detalle_control': detalle_control,
+
+        'alerta_id': registro.id if es_alerta else None,
+        'mantenimiento_id': (
+            getattr(registro, 'mantenimiento_id', None)
+            if es_alerta
+            else registro.id
+        ),
+    }
+
+
+def obtener_registros_indicador(
+    fecha_inicio,
+    fecha_fin,
+    vehiculo_id=None,
+    maquinaria_id=None
+):
+    """
+    Fuente única de registros del indicador HSEQ.
+
+    Devuelve, para CADA tipo de mantenimiento, tres listas:
+
+      - reportados: alertas MANTENIMIENTO creadas en el período
+      - ejecutados: esas MISMAS alertas que tienen un mantenimiento
+        completado posterior sobre el mismo ítem del plan
+      - pendientes: el resto de esas alertas (sin mantenimiento)
+
+    Por construcción: reportados = ejecutados + pendientes.
+    La usan tanto el endpoint de pantalla como el de exportación Excel,
+    de modo que ambos traen exactamente los mismos registros por tipo.
+    """
+    resultado = {
+
+        'preventivo': {
+            'reportados': [],
+            'ejecutados': [],
+            'pendientes': []
+        },
+
+        'correctivo': {
+            'reportados': [],
+            'ejecutados': [],
+            'pendientes': []
+        },
+
+        'inspecciones': {
+            'reportados': [],
+            'ejecutados': [],
+            'pendientes': []
+        }
+    }
+
+    # =================================================
+    # ALERTAS REPORTADAS EN EL PERÍODO
+    # =================================================
+
+    query_alertas = Alerta.query.filter(
+        Alerta.tipo == TIPO_ALERTA_INDICADOR,
+        Alerta.created_at >= fecha_inicio,
+        Alerta.created_at < (fecha_fin + timedelta(days=1))
+    )
+
+    if vehiculo_id:
+        query_alertas = query_alertas.filter(
+            Alerta.vehiculo_id == vehiculo_id
+        )
+
+    if maquinaria_id:
+        query_alertas = query_alertas.filter(
+            Alerta.maquinaria_id == maquinaria_id
+        )
+
+    alertas_reportadas = query_alertas.all()
+
+    # =================================================
+    # TIPO DEL PLAN ITEM
+    # =================================================
+    # Los pendientes SALEN de las alertas reportadas en el
+    # período: nunca pueden superar a los reportados.
+
+    plan_item_ids = {
+        alerta.plan_item_id
+        for alerta in alertas_reportadas
+        if alerta.plan_item_id is not None
+    }
+
+    tipos_plan = {}
+
+    if plan_item_ids:
+        tipos_plan = {
+            plan.id: (plan.tipo_mantenimiento or '').upper()
+            for plan in PlanItem.query.filter(
+                PlanItem.id.in_(plan_item_ids)
+            ).all()
+        }
+
+    def clave_de_alerta(alerta):
+        return TIPO_MANTENIMIENTO_INDICADOR.get(
+            tipos_plan.get(alerta.plan_item_id, '')
+        )
+
+    def serializar_atendida(alerta, ejecucion):
+        """
+        Una alerta atendida conserva su fecha/activo/sistema, pero se
+        enriquece con los datos reales de la ejecución que la cerró.
+        """
+        registro = serializar_registro_indicador(alerta, 'ALERTA')
+        datos = serializar_registro_indicador(
+            ejecucion, 'MANTENIMIENTO'
+        )
+
+        registro['estado'] = 'COMPLETADO'
+        registro['completado'] = True
+        registro['mantenimiento_id'] = datos['mantenimiento_id']
+
+        for campo in (
+            'km', 'horas', 'proveedor', 'costo', 'lugar',
+            'responsable', 'observaciones', 'soporte',
+            'descripcion', 'detalle_control'
+        ):
+            registro[campo] = datos[campo]
+
+        return registro
+
+    def mantenimiento_posterior(alerta):
+        """Mantenimiento completado que atiende la alerta, o None."""
+        fecha_alerta = _fecha_de_alerta(alerta)
+
+        if getattr(alerta, 'mantenimiento_id', None):
+            mantenimiento = Mantenimiento.query.get(
+                alerta.mantenimiento_id
+            )
+            if mantenimiento and mantenimiento.completado:
+                return mantenimiento
+
+        if getattr(alerta, 'maquinaria_mantenimiento_id', None):
+            mantenimiento = MaquinariaMantenimiento.query.get(
+                alerta.maquinaria_mantenimiento_id
+            )
+            if mantenimiento and mantenimiento.completado:
+                return mantenimiento
+
+        if alerta.vehiculo_id and alerta.vehiculo_plan_item_id:
+            return Mantenimiento.query.filter(
+                Mantenimiento.completado == True,
+                Mantenimiento.vehiculo_plan_item_id
+                == alerta.vehiculo_plan_item_id,
+                Mantenimiento.fecha >= fecha_alerta
+            ).order_by(
+                Mantenimiento.fecha.asc(),
+                Mantenimiento.id.asc()
+            ).first()
+
+        if alerta.maquinaria_id and alerta.maquinaria_plan_item_id:
+            return MaquinariaMantenimiento.query.filter(
+                MaquinariaMantenimiento.completado == True,
+                MaquinariaMantenimiento.maquinaria_plan_item_id
+                == alerta.maquinaria_plan_item_id,
+                MaquinariaMantenimiento.fecha >= fecha_alerta
+            ).order_by(
+                MaquinariaMantenimiento.fecha.asc(),
+                MaquinariaMantenimiento.id.asc()
+            ).first()
+
+        return None
+
+    for alerta in alertas_reportadas:
+
+        clave = clave_de_alerta(alerta)
+
+        if clave not in resultado:
+            continue
+
+        registro = serializar_registro_indicador(
+            alerta, 'ALERTA'
+        )
+
+        resultado[clave]['reportados'].append(registro)
+
+        ejecucion = mantenimiento_posterior(alerta)
+
+        if ejecucion:
+            resultado[clave]['ejecutados'].append(
+                serializar_atendida(alerta, ejecucion)
+            )
+        else:
+            resultado[clave]['pendientes'].append(
+                dict(registro)
+            )
+
+    # Orden cronológico dentro de cada lista.
+    for tipo in resultado:
+        for grupo in resultado[tipo]:
+            resultado[tipo][grupo] = sorted(
+                resultado[tipo][grupo],
+                key=lambda registro: registro['fecha'] or ''
+            )
+
+    return resultado
+
+
+# =====================================================
 # ESTILOS EXCEL
 # =====================================================
 
@@ -1755,21 +2382,7 @@ from datetime import timedelta
 )
 def indicador_mantenimiento():
 
-    inicio, fin = obtener_rango_fechas()
-
-    # =================================================
-    # NORMALIZAR FECHAS
-    # =================================================
-
-    if hasattr(inicio, "date"):
-        fecha_inicio = inicio.date()
-    else:
-        fecha_inicio = inicio
-
-    if hasattr(fin, "date"):
-        fecha_fin = fin.date()
-    else:
-        fecha_fin = fin
+    fecha_inicio, fecha_fin = obtener_rango_indicador()
 
     # =================================================
     # FILTROS
@@ -1801,8 +2414,10 @@ def indicador_mantenimiento():
     # vuelve a generar/revisar la alerta.
     # =================================================
 
+    # El indicador SOLO usa alertas de tipo MANTENIMIENTO.
+    # Nunca alertas de DOCUMENTO, GPS, VENCIMIENTO, etc.
     query_alertas = Alerta.query.filter(
-        Alerta.tipo == 'MANTENIMIENTO',
+        Alerta.tipo == TIPO_ALERTA_INDICADOR,
         Alerta.created_at >= fecha_inicio,
         Alerta.created_at < (
             fecha_fin + timedelta(days=1)
@@ -1832,12 +2447,38 @@ def indicador_mantenimiento():
     alertas_mantenimiento = query_alertas.all()
 
     # =================================================
+    # 1b. ALERTAS ACTIVAS DE TODOS LOS PERÍODOS
+    # =================================================
+    # Los pendientes son un estado ACTUAL, no un dato del
+    # período. Una alerta reportada en octubre y no atendida
+    # sigue pendiente en noviembre, por eso se consultan sin
+    # el filtro de fechas del indicador.
+    query_pendientes = Alerta.query.filter(
+        Alerta.tipo == TIPO_ALERTA_INDICADOR,
+        Alerta.estado == 'ACTIVA'
+    )
+
+    if vehiculo_id:
+        query_pendientes = query_pendientes.filter(
+            Alerta.vehiculo_id == vehiculo_id
+        )
+
+    if maquinaria_id:
+        query_pendientes = query_pendientes.filter(
+            Alerta.maquinaria_id == maquinaria_id
+        )
+
+    alertas_pendientes_totales = query_pendientes.all()
+
+    # =================================================
     # 2. OBTENER TIPOS DE PLAN ITEM
     # =================================================
 
     plan_item_ids = {
         alerta.plan_item_id
-        for alerta in alertas_mantenimiento
+        for alerta in (
+            alertas_mantenimiento + alertas_pendientes_totales
+        )
         if alerta.plan_item_id is not None
     }
 
@@ -1918,6 +2559,13 @@ def indicador_mantenimiento():
             alertas_correctivas.append(
                 alerta
             )
+
+    # =================================================
+    # 3b. PENDIENTES
+    # =================================================
+    # Se obtienen de obtener_registros_indicador(), la
+    # misma fuente que alimenta el desplegable y el Excel,
+    # para que el conteo y el detalle nunca divergan.
 
     # =================================================
     # 4. MANTENIMIENTOS REALMENTE EJECUTADOS
@@ -2073,39 +2721,44 @@ def indicador_mantenimiento():
     # 7. INDICADOR PREVENTIVO
     # =================================================
     #
-    # IMPORTANTE:
+    # Fuente ÚNICA para pantalla, desplegable y Excel:
+    #   reportados = alertas del período por tipo normalizado
+    #   ejecutados = esas alertas con mantenimiento completado
+    #   pendientes = reportados − ejecutados
     #
-    # El indicador de pantalla solamente considera
-    # mantenimientos PREVENTIVOS.
-    #
-    # NO incluye INSPECCIONES.
-    #
-    # REPORTADOS:
-    #   Alertas PREVENTIVO
-    #
-    # EJECUTADOS:
-    #   Mantenimientos PREVENTIVO completados
+    # Por eso ejecutados + pendientes = reportados siempre.
     # =================================================
 
+    registros_por_tipo = obtener_registros_indicador(
+        fecha_inicio,
+        fecha_fin,
+        vehiculo_id,
+        maquinaria_id
+    )
+
     preventivos_reportados = len(
-        alertas_preventivas
+        registros_por_tipo['preventivo']['reportados']
     )
 
-    preventivos_ejecutados = (
-        len(mantenimientos_preventivos_vehiculos)
-        +
-        len(mantenimientos_preventivos_maquinaria)
+    preventivos_ejecutados = len(
+        registros_por_tipo['preventivo']['ejecutados']
     )
 
-    preventivos_pendientes = max(
-        preventivos_reportados
-        - preventivos_ejecutados,
-        0
+    preventivos_pendientes = len(
+        registros_por_tipo['preventivo']['pendientes']
+    )
+
+    correctivos_pendientes = len(
+        registros_por_tipo['correctivo']['pendientes']
+    )
+
+    inspecciones_pendientes = len(
+        registros_por_tipo['inspecciones']['pendientes']
     )
 
     if preventivos_reportados == 0:
 
-        porcentaje_preventivo = 100
+        porcentaje_preventivo = 0
 
     else:
 
@@ -2129,18 +2782,16 @@ def indicador_mantenimiento():
     # =================================================
 
     inspecciones_reportadas = len(
-        alertas_inspecciones
+        registros_por_tipo['inspecciones']['reportados']
     )
 
-    inspecciones_ejecutadas = (
-        len(mantenimientos_inspecciones_vehiculos)
-        +
-        len(mantenimientos_inspecciones_maquinaria)
+    inspecciones_ejecutadas = len(
+        registros_por_tipo['inspecciones']['ejecutados']
     )
 
     if inspecciones_reportadas == 0:
 
-        porcentaje_inspecciones = 100
+        porcentaje_inspecciones = 0
 
     else:
 
@@ -2161,18 +2812,16 @@ def indicador_mantenimiento():
     # =================================================
 
     correctivos_reportados = len(
-        alertas_correctivas
+        registros_por_tipo['correctivo']['reportados']
     )
 
-    correctivos_ejecutados = (
-        len(mantenimientos_correctivos_vehiculos)
-        +
-        len(mantenimientos_correctivos_maquinaria)
+    correctivos_ejecutados = len(
+        registros_por_tipo['correctivo']['ejecutados']
     )
 
     if correctivos_reportados == 0:
 
-        porcentaje_correctivo = 100
+        porcentaje_correctivo = 0
 
     else:
 
@@ -2229,6 +2878,13 @@ def indicador_mantenimiento():
     # 12. RESPUESTA
     # =================================================
 
+    def conteo_activo(tipo, grupo, tipo_activo):
+        return len([
+            registro
+            for registro in registros_por_tipo[tipo][grupo]
+            if registro['tipo_activo'] == tipo_activo
+        ])
+
     return jsonify({
 
         # =================================================
@@ -2236,6 +2892,12 @@ def indicador_mantenimiento():
         # =================================================
 
         "indicadores": {
+
+            # ---------------------------------------------
+            # FUENTE ÚNICA DE ALERTAS
+            # ---------------------------------------------
+
+            "fuente_alertas": TIPO_ALERTA_INDICADOR,
 
             # ---------------------------------------------
             # PREVENTIVO
@@ -2267,9 +2929,10 @@ def indicador_mantenimiento():
                 ),
 
                 "metodo_calculo": (
-                    "Mantenimientos preventivos "
-                    "ejecutados / alertas preventivas "
-                    "reportadas × 100"
+                    "Alertas preventivas del período atendidas con "
+                    "mantenimiento completado / alertas preventivas "
+                    "reportadas × 100. "
+                    "Pendientes = reportados − ejecutados."
                 )
             },
 
@@ -2287,15 +2950,19 @@ def indicador_mantenimiento():
                     inspecciones_ejecutadas
                 ),
 
+                "pendientes": (
+                    inspecciones_pendientes
+                ),
+
                 "porcentaje": round(
                     porcentaje_inspecciones,
                     2
                 ),
 
                 "metodo_calculo": (
-                    "Inspecciones ejecutadas / "
-                    "alertas de inspección reportadas "
-                    "× 100"
+                    "Alertas de inspección del período atendidas con "
+                    "mantenimiento completado / inspecciones reportadas "
+                    "× 100. Pendientes = reportadas − ejecutadas."
                 )
             },
 
@@ -2313,6 +2980,10 @@ def indicador_mantenimiento():
                     correctivos_ejecutados
                 ),
 
+                "pendientes": (
+                    correctivos_pendientes
+                ),
+
                 "porcentaje": round(
                     porcentaje_correctivo,
                     2
@@ -2325,9 +2996,9 @@ def indicador_mantenimiento():
                 ),
 
                 "metodo_calculo": (
-                    "Mantenimientos correctivos "
-                    "ejecutados / alertas correctivas "
-                    "reportadas × 100"
+                    "Alertas correctivas del período cerradas con "
+                    "mantenimiento completado / alertas correctivas "
+                    "reportadas × 100. Pendientes = reportados − cerrados."
                 )
             }
         },
@@ -2339,27 +3010,27 @@ def indicador_mantenimiento():
         "vehiculos": {
 
             "preventivos_programados": (
-                len(alertas_preventivas_vehiculos)
+                conteo_activo('preventivo', 'reportados', 'VEHICULO')
             ),
 
             "preventivos_ejecutados": (
-                len(mantenimientos_preventivos_vehiculos)
+                conteo_activo('preventivo', 'ejecutados', 'VEHICULO')
             ),
 
             "inspecciones": (
-                len(alertas_inspecciones_vehiculos)
+                conteo_activo('inspecciones', 'reportados', 'VEHICULO')
             ),
 
             "inspecciones_ejecutadas": (
-                len(mantenimientos_inspecciones_vehiculos)
+                conteo_activo('inspecciones', 'ejecutados', 'VEHICULO')
             ),
 
             "correctivos": (
-                len(alertas_correctivas_vehiculos)
+                conteo_activo('correctivo', 'reportados', 'VEHICULO')
             ),
 
             "correctivos_cerrados": (
-                len(mantenimientos_correctivos_vehiculos)
+                conteo_activo('correctivo', 'ejecutados', 'VEHICULO')
             )
         },
 
@@ -2370,27 +3041,52 @@ def indicador_mantenimiento():
         "maquinaria": {
 
             "preventivos_programados": (
-                len(alertas_preventivas_maquinaria)
+                conteo_activo('preventivo', 'reportados', 'MAQUINARIA')
             ),
 
             "preventivos_ejecutados": (
-                len(mantenimientos_preventivos_maquinaria)
+                conteo_activo('preventivo', 'ejecutados', 'MAQUINARIA')
             ),
 
             "inspecciones": (
-                len(alertas_inspecciones_maquinaria)
+                conteo_activo('inspecciones', 'reportados', 'MAQUINARIA')
             ),
 
             "inspecciones_ejecutadas": (
-                len(mantenimientos_inspecciones_maquinaria)
+                conteo_activo('inspecciones', 'ejecutados', 'MAQUINARIA')
             ),
 
             "correctivos": (
-                len(alertas_correctivas_maquinaria)
+                conteo_activo('correctivo', 'reportados', 'MAQUINARIA')
             ),
 
             "correctivos_cerrados": (
-                len(mantenimientos_correctivos_maquinaria)
+                conteo_activo('correctivo', 'ejecutados', 'MAQUINARIA')
+            )
+        },
+
+        # =================================================
+        # REGISTROS POR TIPO (MISMA FUENTE QUE EL EXCEL)
+        # =================================================
+
+        "registros_por_tipo": registros_por_tipo,
+
+        # =================================================
+        # PENDIENTES POR TIPO (DESPLEGABLE HSEQ)
+        # =================================================
+
+        "pendientes_detalle": {
+
+            "preventivo": (
+                registros_por_tipo['preventivo']['pendientes']
+            ),
+
+            "correctivo": (
+                registros_por_tipo['correctivo']['pendientes']
+            ),
+
+            "inspecciones": (
+                registros_por_tipo['inspecciones']['pendientes']
             )
         },
 
@@ -2447,6 +3143,14 @@ def exportar_indicador_mantenimiento():
 
         from openpyxl.worksheet.page import PageMargins
 
+        from datetime import date
+
+        # ==========================================================
+        # FECHA DE GENERACION
+        # ==========================================================
+
+        hoy = date.today()
+
         # ==========================================================
         # FILTROS
         # ==========================================================
@@ -2493,58 +3197,10 @@ def exportar_indicador_mantenimiento():
             )
 
         # ==========================================================
-        # FECHAS
+        # FECHAS (mismo rango que la pantalla)
         # ==========================================================
 
-        hoy = date.today()
-
-        if tipo == 'rango':
-
-            if not fecha_inicio or not fecha_fin:
-
-                return jsonify({
-                    'error':
-                        'Debe indicar fecha_inicio y fecha_fin'
-                }), 400
-
-            fecha_inicio_obj = datetime.strptime(
-                fecha_inicio,
-                '%Y-%m-%d'
-            ).date()
-
-            fecha_fin_obj = datetime.strptime(
-                fecha_fin,
-                '%Y-%m-%d'
-            ).date()
-
-        elif tipo == 'diario':
-
-            fecha_inicio_obj = hoy
-            fecha_fin_obj = hoy
-
-        elif tipo == 'semanal':
-
-            fecha_fin_obj = hoy
-
-            fecha_inicio_obj = (
-                hoy - timedelta(days=6)
-            )
-
-        else:
-
-            # ======================================================
-            # MENSUAL
-            # ======================================================
-
-            fecha_inicio_obj = hoy.replace(
-                day=1
-            )
-
-            fecha_fin_obj = hoy
-
-        # ==========================================================
-        # VALIDACIÓN DE FECHAS
-        # ==========================================================
+        fecha_inicio_obj, fecha_fin_obj = obtener_rango_indicador()
 
         if fecha_inicio_obj > fecha_fin_obj:
 
@@ -2585,7 +3241,7 @@ def exportar_indicador_mantenimiento():
 
         query_alertas = Alerta.query.filter(
 
-            Alerta.tipo == 'MANTENIMIENTO',
+            Alerta.tipo == TIPO_ALERTA_INDICADOR,
 
             Alerta.created_at >= fecha_inicio_obj,
 
@@ -3036,6 +3692,51 @@ def exportar_indicador_mantenimiento():
         )
 
         # ==========================================================
+        # UNIFICACIÓN CON PANTALLA
+        # ==========================================================
+        # Las consultas anteriores se conservan solo como referencia.
+        # Los valores que se escriben en el Excel salen de la MISMA
+        # fuente que la pantalla: alertas del período vinculadas a su
+        # mantenimiento completado.
+        # ==========================================================
+
+        registros_unificados = obtener_registros_indicador(
+            fecha_inicio_obj,
+            fecha_fin_obj,
+            vehiculo_id,
+            maquinaria_id
+        )
+
+        preventivos_reportados = len(
+            registros_unificados['preventivo']['reportados']
+        )
+
+        inspecciones_reportadas = len(
+            registros_unificados['inspecciones']['reportados']
+        )
+
+        correctivos_reportados = len(
+            registros_unificados['correctivo']['reportados']
+        )
+
+        preventivos_programados = (
+            preventivos_reportados + inspecciones_reportadas
+        )
+
+        preventivos_ejecutados = (
+            len(registros_unificados['preventivo']['ejecutados'])
+            + len(registros_unificados['inspecciones']['ejecutados'])
+        )
+
+        inspecciones_ejecutadas = len(
+            registros_unificados['inspecciones']['ejecutados']
+        )
+
+        correctivos_cerrados = len(
+            registros_unificados['correctivo']['ejecutados']
+        )
+
+        # ==========================================================
         # PORCENTAJE PREVENTIVO
         # ==========================================================
 
@@ -3074,13 +3775,6 @@ def exportar_indicador_mantenimiento():
         # ==========================================================
         # PORCENTAJE INSPECCIONES
         # ==========================================================
-
-        inspecciones_ejecutadas = (
-
-            inspecciones_vehiculos
-
-            + inspecciones_maquinaria
-        )
 
         if inspecciones_reportadas > 0:
 
@@ -4205,6 +4899,174 @@ def exportar_indicador_mantenimiento():
 
             footer=0.15
         )
+
+        # ==========================================================
+        # HOJA: REGISTROS POR TIPO DE MANTENIMIENTO
+        # ==========================================================
+        # Cada tipo trae sus propios registros: reportados (alertas),
+        # ejecutados (mantenimientos) y pendientes. Son los mismos
+        # registros que muestra la pantalla.
+
+        ws_registros = wb.create_sheet('REGISTROS POR TIPO')
+        ws_registros.sheet_view.showGridLines = False
+
+        encabezados_registros = [
+
+            'TIPO',
+            'ORIGEN',
+            'FECHA',
+            'ACTIVO',
+            'SISTEMA',
+            'MANTENIMIENTO',
+            'ESTADO',
+            'KM',
+            'HORAS',
+            'PROVEEDOR',
+            'COSTO',
+            'LUGAR',
+            'RESPONSABLE',
+            'DETALLE CONTROL',
+            'DESCRIPCION',
+            'SOPORTE'
+        ]
+
+        anchos_registros = [
+            16, 16, 13, 14, 20, 26, 14, 12, 10,
+            18, 12, 18, 18, 46, 46, 34
+        ]
+
+        letras_columnas = [
+            'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+            'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P'
+        ]
+
+        for letra, ancho in zip(
+            letras_columnas,
+            anchos_registros
+        ):
+            ws_registros.column_dimensions[
+                letra
+            ].width = ancho
+
+        for columna, titulo in enumerate(
+            encabezados_registros,
+            start=1
+        ):
+            celda = ws_registros.cell(
+                1,
+                columna,
+                titulo
+            )
+            celda.fill = azul_oscuro
+            celda.font = blanco_negrita
+            celda.alignment = center
+            celda.border = border
+
+        ws_registros.row_dimensions[1].height = 28
+
+        registros_indicador = obtener_registros_indicador(
+
+            fecha_inicio_obj,
+            fecha_fin_obj,
+            vehiculo_id,
+            maquinaria_id
+        )
+
+        nombres_tipos = {
+
+            'preventivo': 'PREVENTIVO',
+            'correctivo': 'CORRECTIVO',
+            'inspecciones': 'INSPECCIONES'
+        }
+
+        nombres_grupos = {
+
+            'reportados': 'REPORTADOS',
+            'ejecutados': 'EJECUTADOS',
+            'pendientes': 'PENDIENTES'
+        }
+
+        fila_registro = 2
+
+        for clave_tipo, grupos in registros_indicador.items():
+
+            for clave_grupo, registros in grupos.items():
+
+                if not registros:
+                    continue
+
+                ws_registros.merge_cells(
+                    start_row=fila_registro,
+                    start_column=1,
+                    end_row=fila_registro,
+                    end_column=len(encabezados_registros)
+                )
+
+                celda_grupo = ws_registros.cell(
+                    fila_registro,
+                    1,
+                    (
+                        f"{nombres_tipos[clave_tipo]} - "
+                        f"{nombres_grupos[clave_grupo]} "
+                        f"({len(registros)})"
+                    )
+                )
+                celda_grupo.fill = azul_claro
+                celda_grupo.font = negrita
+                celda_grupo.alignment = left
+                celda_grupo.border = border
+
+                fila_registro += 1
+
+                for registro in registros:
+
+                    valores_registro = [
+
+                        nombres_tipos[clave_tipo],
+                        registro['origen'],
+                        registro['fecha'],
+                        registro['activo'],
+                        registro['sistema'],
+                        registro['mantenimiento'],
+                        registro['estado'],
+                        registro['km'],
+                        registro['horas'],
+                        registro['proveedor'],
+                        registro['costo'],
+                        registro['lugar'],
+                        registro['responsable'],
+                        registro['detalle_control'],
+                        registro['descripcion'],
+                        registro['soporte']
+                    ]
+
+                    for columna, valor in enumerate(
+                        valores_registro,
+                        start=1
+                    ):
+                        celda = ws_registros.cell(
+                            fila_registro,
+                            columna,
+                            valor
+                        )
+                        celda.font = normal
+                        celda.alignment = left
+                        celda.border = border
+
+                    fila_registro += 1
+
+        if fila_registro == 2:
+
+            ws_registros.cell(
+                2,
+                1,
+                (
+                    'No hay registros de mantenimiento '
+                    'para los filtros seleccionados.'
+                )
+            )
+
+        ws_registros.freeze_panes = 'A2'
 
         # ==========================================================
         # GENERAR ARCHIVO

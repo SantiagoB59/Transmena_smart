@@ -10,6 +10,8 @@ from models import (
     Maquinaria,
     MaquinariaPlanItem,
     MaquinariaDocumento,
+    Mantenimiento,
+    MaquinariaMantenimiento,
     TipoVehiculoCampo,
     VehiculoCampoValor,
 )
@@ -19,6 +21,21 @@ from datetime import datetime, date
 # sockets
 from sockets.socket_handler import socketio
 from services.email_service import enviar_email_alerta
+
+# =========================================================
+# VEHÍCULOS BLOQUEADOS
+# =========================================================
+def _vehiculo_bloqueado(vehiculo):
+    """Inactivo o dado de baja: no genera ni recibe ninguna alerta."""
+    if not vehiculo:
+        return True
+
+    estado = (vehiculo.estado or '').strip().upper()
+
+    return (
+        estado == 'INACTIVO'
+        or vehiculo.activo is False
+    )
 
 # =========================================================
 # CREAR ALERTA
@@ -54,20 +71,52 @@ def crear_alerta(
 
     vehiculo_plan_item_detalle_id=None,
 
-    metadata=None
+    metadata=None,
+
+    permitir_reapertura=True
 ):
 
     """
     Evita crear alertas duplicadas ACTIVAS
-    y actualiza si ya existe
+    y actualiza si ya existe.
+
+    permitir_reapertura=False se usa para mantenimientos
+    CORRECTIVO: una vez resuelta la alerta (arreglo), no se
+    reactiva ni se genera otra en el siguiente ciclo.
     """
+
+    # =====================================================
+    # VEHÍCULO INACTIVO = BLOQUEO TOTAL
+    # =====================================================
+    # Ni alerta nueva, ni reapertura, ni actualización,
+    # ni socket, ni correo. Se resuelve el id desde cualquier
+    # relación recibida para que ningún generador se escape.
+    id_vehiculo = vehiculo_id
+
+    if not id_vehiculo and vehiculo_plan_item_id:
+        vpi = VehiculoPlanItem.query.get(vehiculo_plan_item_id)
+        id_vehiculo = vpi.vehiculo_id if vpi else None
+
+    if not id_vehiculo and vehiculo_plan_item_detalle_id:
+        detalle = VehiculoPlanItemDetalle.query.get(
+            vehiculo_plan_item_detalle_id
+        )
+        if detalle and detalle.vehiculo_plan_item:
+            id_vehiculo = detalle.vehiculo_plan_item.vehiculo_id
+
+    if id_vehiculo and _vehiculo_bloqueado(
+        Vehiculo.query.get(id_vehiculo)
+    ):
+        return None
 
     # =====================================================
     # BASE QUERY
     # =====================================================
-    query = Alerta.query.filter_by(
-        tipo=tipo,
-        estado='ACTIVA'
+    # Reabrir una alerta RESUELTA en vez de insertar otra fila.
+    # Esto evita el historial inflado que rompía el indicador.
+    query = Alerta.query.filter(
+        Alerta.tipo == tipo,
+        Alerta.estado.in_(['ACTIVA', 'RESUELTA'])
     )
 
     # =====================================================
@@ -112,7 +161,25 @@ def crear_alerta(
     # =====================================================
     if alerta_existente:
 
+        # Un correctivo es un arreglo de una sola vez: si ya está
+        # resuelta, no se reactiva ni se refresca su fecha.
+        if (
+            alerta_existente.estado == 'RESUELTA'
+            and not permitir_reapertura
+        ):
+            return alerta_existente
+
         hubo_cambios = False
+
+        # Si la alerta estaba resuelta, se reactiva la MISMA fila.
+        if alerta_existente.estado == 'RESUELTA':
+            alerta_existente.estado = 'ACTIVA'
+            alerta_existente.fecha_resolucion = None
+
+            if alerta_existente.tipo == 'MANTENIMIENTO':
+                alerta_existente.mantenimiento_id = None
+
+            hubo_cambios = True
 
         if alerta_existente.categoria != categoria:
             alerta_existente.categoria = categoria
@@ -236,7 +303,8 @@ def resolver_alerta(alerta_id):
 # =========================================================
 
 def resolver_alertas_mantenimiento(
-    vehiculo_plan_item_id
+    vehiculo_plan_item_id,
+    mantenimiento_id=None
 ):
 
     alertas = Alerta.query.filter_by(
@@ -249,6 +317,9 @@ def resolver_alertas_mantenimiento(
 
         alerta.estado = 'RESUELTA'
         alerta.fecha_resolucion = datetime.utcnow()
+
+        if mantenimiento_id is not None:
+            alerta.mantenimiento_id = mantenimiento_id
 
         socketio.emit(
             'alerta_resuelta',
@@ -304,7 +375,7 @@ def evaluar_alerta_articulo(detalle):
 
     vehiculo = vpi.vehiculo
 
-    if vehiculo.estado == 'INACTIVO':
+    if _vehiculo_bloqueado(vehiculo):
 
         resolver_alertas_articulo(detalle.id)
 
@@ -614,6 +685,9 @@ def generar_alertas_campos_dinamicos():
         if not vehiculo:
             continue
 
+        if _vehiculo_bloqueado(vehiculo):
+            continue
+
         # =====================================================
         # CONVERTIR FECHA
         # =====================================================
@@ -766,6 +840,13 @@ def generar_alertas_campos_dinamicos():
 # ALERTAS MANTENIMIENTO VEHÍCULOS
 # =========================================================
 
+def _es_correctivo(plan_item):
+    return bool(
+        plan_item
+        and (plan_item.tipo_mantenimiento or '').upper() == 'CORRECTIVO'
+    )
+
+
 def generar_alertas_vehiculos():
 
     items = VehiculoPlanItem.query.filter_by(
@@ -780,8 +861,29 @@ def generar_alertas_vehiculos():
             continue
 
         # No generar nuevas alertas para vehículos INACTIVOS
-        if vehiculo.estado == 'INACTIVO':
+        if _vehiculo_bloqueado(vehiculo):
+            resolver_alertas_mantenimiento(item.id)
             continue
+
+        es_correctivo = _es_correctivo(item.plan_item)
+
+        # -----------------------------------------
+        # CORRECTIVO = ARREGLO DE UNA SOLA VEZ
+        # -----------------------------------------
+        # Si ya se registró la ejecución de este correctivo,
+        # no se vuelve a pedir cuando se cumpla el kilometraje
+        # o el tiempo programado.
+        if es_correctivo:
+            ya_arreglado = Mantenimiento.query.filter(
+                Mantenimiento.completado == True,
+                Mantenimiento.vehiculo_plan_item_id == item.id
+            ).first()
+
+            if ya_arreglado:
+                resolver_alertas_mantenimiento(
+                    vehiculo_plan_item_id=item.id
+                )
+                continue
 
         estado = item.calcular_estado()
         # -----------------------------------------
@@ -810,11 +912,17 @@ def generar_alertas_vehiculos():
 
             'plan_item': item.plan_item.nombre,
 
-            'km_actual': vehiculo.km_actual,
+            # El estado se calcula con km_estimado (models.py),
+            # no con km_actual. Guardamos ambos para trazabilidad.
+            'km_actual': vehiculo.km_estimado,
+
+            'km_actual_bd': vehiculo.km_actual,
 
             'ultimo_km': item.ultimo_km,
 
             'frecuencia': item.frecuencia_valor,
+
+            'alerta_valor': item.alerta_valor,
 
             'estado_calculado': estado
         }
@@ -841,7 +949,9 @@ def generar_alertas_vehiculos():
 
             prioridad=prioridad,
 
-            metadata=metadata
+            metadata=metadata,
+
+            permitir_reapertura=not es_correctivo
         )
 
 
@@ -865,7 +975,7 @@ def generar_alertas_documentos():
             continue
 
         # No generar nuevas alertas para vehículos INACTIVOS
-        if vehiculo.estado == 'INACTIVO':
+        if _vehiculo_bloqueado(vehiculo):
             continue
 
         if not doc.fecha_vencimiento:
@@ -990,7 +1100,7 @@ def generar_alertas_velocidad():
                 continue
 
 # No generar nuevas alertas para vehículos INACTIVOS
-        if vehiculo.estado == 'INACTIVO':
+        if _vehiculo_bloqueado(vehiculo):
             continue
 
         prioridad = (
@@ -1093,10 +1203,43 @@ def generar_alertas_apagado():
 
 
 # =========================================================
+# BLOQUEO DE VEHÍCULOS INACTIVOS
+# =========================================================
+
+def resolver_alertas_vehiculos_inactivos():
+    """Cierra TODA alerta ACTIVA de vehículos inactivos o dados de baja."""
+    for vehiculo in Vehiculo.query.all():
+
+        if not _vehiculo_bloqueado(vehiculo):
+            continue
+
+        alertas = Alerta.query.filter(
+            Alerta.vehiculo_id == vehiculo.id,
+            Alerta.estado == 'ACTIVA'
+        ).all()
+
+        for alerta in alertas:
+            alerta.estado = 'RESUELTA'
+            alerta.fecha_resolucion = datetime.utcnow()
+
+            socketio.emit(
+                'alerta_resuelta',
+                alerta.to_dict()
+            )
+
+        if alertas:
+            db.session.commit()
+
+    return True
+
+
+# =========================================================
 # EJECUTAR MOTOR COMPLETO
 # =========================================================
 
 def ejecutar_motor_alertas():
+
+    resolver_alertas_vehiculos_inactivos()
 
     generar_alertas_vehiculos()
     
@@ -1119,7 +1262,75 @@ def ejecutar_motor_alertas():
 # OBTENER TODAS
 # =========================================================
 
-def obtener_todas_alertas(estado_vehiculo=None):
+def aplicar_filtro_fechas(
+    query,
+    fecha_desde=None,
+    fecha_hasta=None,
+    mes=None,
+    anio=None
+):
+
+    """
+    Filtra alertas por rango de fechas o por mes/año.
+    Se usa created_at porque es la fecha mostrada en la pantalla.
+    """
+
+    if mes:
+        try:
+            mes = int(mes)
+        except (TypeError, ValueError):
+            mes = None
+
+    if anio:
+        try:
+            anio = int(anio)
+        except (TypeError, ValueError):
+            anio = None
+
+    # El mes tiene prioridad sobre el rango libre
+    if mes and 1 <= mes <= 12:
+
+        anio = anio or date.today().year
+
+        desde = datetime(anio, mes, 1)
+
+        if mes == 12:
+            hasta = datetime(anio + 1, 1, 1)
+        else:
+            hasta = datetime(anio, mes + 1, 1)
+
+        return query.filter(
+            Alerta.created_at >= desde,
+            Alerta.created_at < hasta
+        )
+
+    if fecha_desde:
+        try:
+            desde = datetime.strptime(fecha_desde, '%Y-%m-%d')
+            query = query.filter(Alerta.created_at >= desde)
+        except (TypeError, ValueError):
+            pass
+
+    if fecha_hasta:
+        try:
+            hasta = (
+                datetime.strptime(fecha_hasta, '%Y-%m-%d')
+                + timedelta(days=1)
+            )
+            query = query.filter(Alerta.created_at < hasta)
+        except (TypeError, ValueError):
+            pass
+
+    return query
+
+
+def obtener_todas_alertas(
+    estado_vehiculo=None,
+    fecha_desde=None,
+    fecha_hasta=None,
+    mes=None,
+    anio=None
+):
 
     query = Alerta.query
 
@@ -1134,6 +1345,14 @@ def obtener_todas_alertas(estado_vehiculo=None):
             Vehiculo.estado == estado_vehiculo
         )
 
+    query = aplicar_filtro_fechas(
+        query,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        mes=mes,
+        anio=anio
+    )
+
     alertas = query.order_by(
         Alerta.created_at.desc()
     ).all()
@@ -1146,7 +1365,13 @@ def obtener_todas_alertas(estado_vehiculo=None):
 # OBTENER ACTIVAS
 # =========================================================
 
-def obtener_alertas_activas(estado_vehiculo=None):
+def obtener_alertas_activas(
+    estado_vehiculo=None,
+    fecha_desde=None,
+    fecha_hasta=None,
+    mes=None,
+    anio=None
+):
 
     query = Alerta.query.filter_by(
         estado='ACTIVA'
@@ -1163,6 +1388,14 @@ def obtener_alertas_activas(estado_vehiculo=None):
             Vehiculo.estado == estado_vehiculo
         )
 
+    query = aplicar_filtro_fechas(
+        query,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        mes=mes,
+        anio=anio
+    )
+
     alertas = query.order_by(
         Alerta.created_at.desc()
     ).all()
@@ -1176,21 +1409,34 @@ def obtener_alertas_activas(estado_vehiculo=None):
 # ESTADÍSTICAS
 # =========================================================
 
-def obtener_estadisticas_alertas():
+def obtener_estadisticas_alertas(
+    fecha_desde=None,
+    fecha_hasta=None,
+    mes=None,
+    anio=None
+):
 
-    total = Alerta.query.count()
+    base = aplicar_filtro_fechas(
+        Alerta.query,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        mes=mes,
+        anio=anio
+    )
 
-    activas = Alerta.query.filter_by(
-        estado='ACTIVA'
+    total = base.count()
+
+    activas = base.filter(
+        Alerta.estado == 'ACTIVA'
     ).count()
 
-    resueltas = Alerta.query.filter_by(
-        estado='RESUELTA'
+    resueltas = base.filter(
+        Alerta.estado == 'RESUELTA'
     ).count()
 
-    criticas = Alerta.query.filter_by(
-        prioridad='CRITICA',
-        estado='ACTIVA'
+    criticas = base.filter(
+        Alerta.prioridad == 'CRITICA',
+        Alerta.estado == 'ACTIVA'
     ).count()
 
     return {
@@ -1272,6 +1518,21 @@ def generar_alertas_maquinaria():
         if maquinaria.estado != 'OPERATIVO':
             continue
 
+        es_correctivo = _es_correctivo(item.plan_item)
+
+        # CORRECTIVO = ARREGLO DE UNA SOLA VEZ
+        if es_correctivo:
+            ya_arreglado = MaquinariaMantenimiento.query.filter(
+                MaquinariaMantenimiento.completado == True,
+                MaquinariaMantenimiento.maquinaria_plan_item_id == item.id
+            ).first()
+
+            if ya_arreglado:
+                resolver_alertas_mantenimiento_maquinaria(
+                    item.id
+                )
+                continue
+
         estado = item.calcular_estado()
 
         if estado not in ['PENDIENTE', 'VENCIDO']:
@@ -1326,7 +1587,9 @@ def generar_alertas_maquinaria():
 
             prioridad=prioridad,
 
-            metadata=metadata
+            metadata=metadata,
+
+            permitir_reapertura=not es_correctivo
         )
         
         

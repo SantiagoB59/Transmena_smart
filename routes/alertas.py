@@ -39,7 +39,11 @@ def listar_alertas():
 
     return jsonify(
         obtener_todas_alertas(
-            estado_vehiculo=estado_vehiculo
+            estado_vehiculo=estado_vehiculo,
+            fecha_desde=request.args.get('fecha_desde'),
+            fecha_hasta=request.args.get('fecha_hasta'),
+            mes=request.args.get('mes'),
+            anio=request.args.get('anio')
         )
     )
 
@@ -114,7 +118,12 @@ def resolver(alerta_id):
 def estadisticas():
 
     return jsonify(
-        obtener_estadisticas_alertas()
+        obtener_estadisticas_alertas(
+            fecha_desde=request.args.get('fecha_desde'),
+            fecha_hasta=request.args.get('fecha_hasta'),
+            mes=request.args.get('mes'),
+            anio=request.args.get('anio')
+        )
     )
     
     

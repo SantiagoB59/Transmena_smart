@@ -128,10 +128,40 @@ def importar_plan_excel():
         if km_frecuencia == 0:
             continue
 
-        # CALCULO DE LA ALERTA: Frecuencia menos los kilómetros de anticipación que requiere el usuario
-        # Ejemplo: Si se hace cada 15,000 km y pides alerta con 1,500 km de anticipación -> Alerta en 13,500 km.
-        # Evitamos que de valores negativos si la frecuencia es muy pequeña.
-        valor_calculado_alerta = max(100, km_frecuencia - km_anticipacion_alerta)
+        # CALCULO DE LA ALERTA
+        #
+        # `alerta_valor` es el km RESTANTES a partir de los cuales se dispara
+        # la alerta. En models.py la comparación es:
+        #
+        #     if restante <= alerta_valor: -> PENDIENTE
+        #
+        # Por eso se guarda la ANTICIPACIÓN directamente, NO
+        # frecuencia - anticipación. Antes se guardaba 13.500 para una
+        # frecuencia de 15.000 con anticipación de 1.500, y la alerta
+        # saltaba a los 1.500 km de uso, es decir 13.500 km antes del
+        # vencimiento.
+        #
+        # Ejemplo correcto:
+        #   frecuencia 15.000, anticipación 1.500
+        #   alerta_valor = 1.500
+        #   salta cuando restante <= 1.500 (faltan 1.500 km).
+        #
+        # Se limita al 10% de la frecuencia para frecuencias pequeñas.
+        if km_anticipacion_alerta is None or km_anticipacion_alerta < 0:
+            km_anticipacion_alerta = 0
+
+        anticipacion_maxima = int(km_frecuencia * 0.10)
+        valor_calculado_alerta = min(
+            km_anticipacion_alerta,
+            anticipacion_maxima
+        )
+        valor_calculado_alerta = max(1, valor_calculado_alerta)
+
+        if valor_calculado_alerta >= km_frecuencia:
+            raise ValueError(
+                f"alerta_valor inválido para frecuencia={km_frecuencia}, "
+                f"anticipación={km_anticipacion_alerta}"
+            )
 
         nombre_item = f"Mantenimiento {sistema_actual} ({texto_frecuencia})"
 

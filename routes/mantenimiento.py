@@ -179,9 +179,8 @@ def crear():
         'km',
         type=int
     )
-    if km is None:
-        km = vehiculo.km_estimado
-
+    # `vehiculo` aún no existe en este punto. Si no se envía km,
+    # la validación inferior devuelve "km requerido".
     fecha = request.form.get('fecha')
 
     tipo = request.form.get('tipo')
@@ -226,6 +225,18 @@ def crear():
     vehiculo = Vehiculo.query.get_or_404(
         vehiculo_id
     )
+
+    # =====================================
+    # VEHÍCULO INACTIVO = BLOQUEO TOTAL
+    # =====================================
+    if (
+        (vehiculo.estado or '').strip().upper() == 'INACTIVO'
+        or vehiculo.activo is False
+    ):
+        return jsonify({
+            "error":
+                "Vehículo inactivo: no se pueden registrar mantenimientos"
+        }), 403
 
     # =====================================
     # VALIDAR PLAN VEHICULO
@@ -275,6 +286,27 @@ def crear():
 
 # Guardar la ruta para la web, no la del sistema operativo
             soporte_path = f"uploads/mantenimientos/{filename}"
+
+    # =====================================
+    # NORMALIZAR TIPO DESDE EL PLAN
+    # =====================================
+    # El formulario puede enviar abreviaturas (PR). Si el tipo
+    # recibido no es válido, se toma el tipo del ítem del plan
+    # para que un arreglo quede registrado como CORRECTIVO.
+    tipos_validos = {'PREVENTIVO', 'CORRECTIVO', 'INSPECCION'}
+
+    tipo_normalizado = (tipo or '').upper()
+
+    if tipo_normalizado not in tipos_validos:
+        plan = vpi.plan_item
+        tipo_normalizado = (
+            (plan.tipo_mantenimiento or '').upper()
+            if plan
+            else tipo_normalizado
+        )
+
+    if tipo_normalizado in tipos_validos:
+        tipo = tipo_normalizado
 
     # =====================================
     # CREAR
