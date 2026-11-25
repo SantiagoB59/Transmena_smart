@@ -2513,10 +2513,8 @@ def indicador_mantenimiento():
     #   Solo alertas CORRECTIVO
     #
     # Las inspecciones NO se suman al preventivo
-    # en este endpoint.
-    #
-    # La suma PREVENTIVO + INSPECCION se realizará
-    # únicamente en el Excel HSEQ-R-159.
+    # en este endpoint ni en el Excel HSEQ-R-159.
+    # Cada tipo se reporta en su propio indicador.
     # =================================================
 
     alertas_preventivas = []
@@ -3517,19 +3515,14 @@ def exportar_indicador_mantenimiento():
         #
         # IMPORTANTE:
         #
-        # Para el Excel HSEQ-R-159:
-        #
-        # PREVENTIVO =
-        #
-        # PREVENTIVOS + INSPECCIONES
+        # El indicador preventivo SOLO considera actividades PREVENTIVAS.
+        # Las inspecciones se reportan en su propio indicador y NO se
+        # suman al preventivo en ningún endpoint ni en el Excel.
         #
         # ==========================================================
 
         preventivos_programados = (
-
             preventivos_reportados
-
-            + inspecciones_reportadas
         )
 
         preventivos_ejecutados = (
@@ -3537,10 +3530,6 @@ def exportar_indicador_mantenimiento():
             preventivos_vehiculos
 
             + preventivos_maquinaria
-
-            + inspecciones_vehiculos
-
-            + inspecciones_maquinaria
         )
 
         # ==========================================================
@@ -3720,12 +3709,11 @@ def exportar_indicador_mantenimiento():
         )
 
         preventivos_programados = (
-            preventivos_reportados + inspecciones_reportadas
+            preventivos_reportados
         )
 
         preventivos_ejecutados = (
             len(registros_unificados['preventivo']['ejecutados'])
-            + len(registros_unificados['inspecciones']['ejecutados'])
         )
 
         inspecciones_ejecutadas = len(
@@ -4706,12 +4694,11 @@ def exportar_indicador_mantenimiento():
             'INDICADOR DE CUMPLIMIENTO DEL MANTENIMIENTO PREVENTIVO',
 
             'Mide el cumplimiento de las actividades de mantenimiento '
-            'preventivo e inspección reportadas durante el período evaluado.',
+            'preventivo reportadas durante el período evaluado.',
 
             'Permite determinar el porcentaje de actividades preventivas '
-            'e inspecciones ejecutadas frente a las actividades reportadas. '
-            'Para este indicador HSEQ, las inspecciones hacen parte del '
-            'cumplimiento preventivo.',
+            'ejecutadas frente a las actividades preventivas reportadas. '
+            'Las inspecciones se evalúan en un indicador independiente.',
 
             'Gestión y cumplimiento.',
 
@@ -4725,8 +4712,8 @@ def exportar_indicador_mantenimiento():
 
             '≥ 90 %.',
 
-            '(Mantenimientos preventivos e inspecciones ejecutados / '
-            'Mantenimientos preventivos e inspecciones reportados) × 100',
+            '(Mantenimientos preventivos ejecutados / '
+            'Mantenimientos preventivos reportados) × 100',
 
             frecuencia_reporte,
 
