@@ -18,6 +18,8 @@ from models import (
 
 from datetime import datetime, date
 
+from sqlalchemy import or_
+
 # sockets
 from sockets.socket_handler import socketio
 from services.email_service import enviar_email_alerta
@@ -36,6 +38,62 @@ def _vehiculo_bloqueado(vehiculo):
         estado == 'INACTIVO'
         or vehiculo.activo is False
     )
+
+
+# =========================================================
+# EMAIL INDIVIDUAL: SOLO UNA VEZ POR EPISODIO
+# =========================================================
+def _enviar_email_alerta_unica(alerta, prioridad):
+    """
+    Evita que el motor de 15 minutos reenvíe el mismo correo una y otra
+    vez cuando cambia el metadata (km GPS, velocidad, días, etc.).
+
+    La alerta tiene el campo `email_enviado` justo para esto. Se marca
+    de forma atómica antes de enviar: si otro proceso ya lo marcó,
+    este no envía. Si SMTP falla, se desmarca para reintentar después.
+    """
+    if prioridad not in ('CRITICA', 'ALTA'):
+        return False
+
+    if alerta.email_enviado:
+        return False
+
+    actualizados = (
+        Alerta.query
+        .filter(Alerta.id == alerta.id)
+        .filter(
+            or_(
+                Alerta.email_enviado.is_(False),
+                Alerta.email_enviado.is_(None)
+            )
+        )
+        .update(
+            {"email_enviado": True},
+            synchronize_session=False
+        )
+    )
+
+    if not actualizados:
+        return False
+
+    alerta.email_enviado = True
+    db.session.commit()
+
+    try:
+        enviar_email_alerta(alerta)
+        return True
+
+    except Exception as e:
+        print("Error enviando email alerta:", e)
+
+        Alerta.query.filter(Alerta.id == alerta.id).update(
+            {"email_enviado": False},
+            synchronize_session=False
+        )
+        alerta.email_enviado = False
+        db.session.commit()
+        return False
+
 
 # =========================================================
 # CREAR ALERTA
@@ -179,6 +237,9 @@ def crear_alerta(
             if alerta_existente.tipo == 'MANTENIMIENTO':
                 alerta_existente.mantenimiento_id = None
 
+            # Es un episodio nuevo: permite un correo, pero solo uno.
+            alerta_existente.email_enviado = False
+
             hubo_cambios = True
 
         if alerta_existente.categoria != categoria:
@@ -213,12 +274,12 @@ def crear_alerta(
                 alerta_existente.to_dict()
             )
 
-            # email solo críticas
-            if prioridad == "CRITICA":
-                try:
-                    enviar_email_alerta(alerta_existente)
-                except Exception as e:
-                    print("Error enviando email:", e)
+            # Correo una sola vez por episodio. Los cambios de metadata
+            # (km GPS, velocidad, días) ya NO reenvían el correo.
+            _enviar_email_alerta_unica(
+                alerta_existente,
+                alerta_existente.prioridad
+            )
 
         return alerta_existente
 
@@ -267,13 +328,9 @@ def crear_alerta(
     )
 
     # =====================================================
-    # EMAIL (CRÍTICA / ALTA)
+    # EMAIL (CRÍTICA / ALTA) - SOLO UNA VEZ
     # =====================================================
-    try:
-        if prioridad in ['CRITICA', 'ALTA']:
-            enviar_email_alerta(alerta)
-    except Exception as e:
-        print("Error enviando email alerta:", e)
+    _enviar_email_alerta_unica(alerta, prioridad)
 
     return alerta
 

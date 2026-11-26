@@ -1,5 +1,6 @@
 from io import BytesIO
-from datetime import datetime, date
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from flask_mail import Message
 from openpyxl import Workbook
@@ -18,6 +19,65 @@ from models import Alerta
 import os
 
 
+ZONA_BOGOTA = ZoneInfo("America/Bogota")
+
+
+# =====================================================
+# CONTROL DE ENVÍO ÚNICO DIARIO
+# =====================================================
+def _fecha_bogota():
+    """Fecha del día en Colombia, no la del servidor."""
+    return datetime.now(ZONA_BOGOTA).date()
+
+
+def _rango_utc_del_dia(hoy):
+    """
+    `created_at` se guarda en UTC (datetime.utcnow). Bogotá es UTC-5,
+    así que el inicio del día local se convierte a UTC antes de filtrar.
+    """
+    inicio_local = datetime.combine(
+        hoy,
+        time.min,
+        tzinfo=ZONA_BOGOTA
+    )
+
+    inicio_utc = (
+        inicio_local
+        .astimezone(timezone.utc)
+        .replace(tzinfo=None)
+    )
+
+    fin_utc = inicio_utc + timedelta(days=1)
+
+    return inicio_utc, fin_utc
+
+
+def _archivo_marca_diario(hoy):
+    """
+    Marca atómica por fecha: con open(..., 'x') solo un proceso logra
+    crearla. Así, aunque haya dos instancias del backend, se envía una
+    sola vez al día.
+    """
+    carpeta = os.path.join(os.getcwd(), "estado_reportes")
+    os.makedirs(carpeta, exist_ok=True)
+
+    nombre = f"consolidado_alertas_{hoy.isoformat()}.lock"
+
+    # Limpieza de marcas de días anteriores.
+    for archivo in os.listdir(carpeta):
+        if (
+            archivo.startswith("consolidado_alertas_")
+            and archivo.endswith(".lock")
+            and archivo != nombre
+        ):
+            try:
+                os.remove(os.path.join(carpeta, archivo))
+            except OSError:
+                pass
+
+    return os.path.join(carpeta, nombre)
+
+
 # =====================================================
 # ENVIAR CONSOLIDADO DIARIO DE ALERTAS
 # =====================================================
@@ -27,23 +87,20 @@ def enviar_reporte_diario_alertas(app):
 
         print("📨 Ejecutando consolidado diario...")
 
-        hoy = date.today()
+        hoy = _fecha_bogota()
+        inicio_utc, fin_utc = _rango_utc_del_dia(hoy)
 
         alertas = (
             Alerta.query
             .filter(
-                Alerta.created_at >= datetime.combine(
-                    hoy,
-                    datetime.min.time()
-                )
+                Alerta.created_at >= inicio_utc,
+                Alerta.created_at < fin_utc
             )
             .order_by(
                 Alerta.created_at.desc()
             )
             .all()
         )
-
-        archivo_excel = generar_excel_alertas(alertas)
 
         destinatarios = [
         "transmenasmart@gmail.com",
@@ -56,6 +113,15 @@ def enviar_reporte_diario_alertas(app):
         )
 
         total = len(alertas)
+
+        if total == 0:
+            print(
+                "📭 No hay alertas registradas hoy; "
+                "no se envía consolidado vacío."
+            )
+            return
+
+        archivo_excel = generar_excel_alertas(alertas)
 
         criticas = len([
             a for a in alertas
@@ -185,14 +251,37 @@ def enviar_reporte_diario_alertas(app):
             data=archivo_excel.getvalue()
         )
 
-        print(f"📧 Enviando a: {destinatarios}")
+        marca = _archivo_marca_diario(hoy)
 
-        mail.send(msg)
+        try:
+            with open(marca, "x", encoding="utf-8") as archivo:
+                archivo.write(
+                    datetime.now(ZONA_BOGOTA).isoformat()
+                )
+        except FileExistsError:
+            print(
+                "⏭️ El consolidado de hoy ya fue enviado; se omite."
+            )
+            return
 
-        print(
-            f"✅ Consolidado diario enviado "
-            f"({total} alertas)"
-        )
+        try:
+            print(f"📧 Enviando a: {destinatarios}")
+
+            mail.send(msg)
+
+            print(
+                f"✅ Consolidado diario enviado "
+                f"({total} alertas)"
+            )
+
+        except Exception:
+            # Si falla el envío, se borra la marca para poder reintentar.
+            try:
+                os.remove(marca)
+            except OSError:
+                pass
+
+            raise
 # =====================================================
 # EXCEL PROFESIONAL
 # =====================================================

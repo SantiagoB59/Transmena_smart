@@ -49,7 +49,10 @@ def iniciar_scheduler(app):
         hour=21,
         minute=0,
         id='reporte_alertas_diario',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300
     )
 
     # =========================================
@@ -73,13 +76,15 @@ def iniciar_scheduler(app):
         trigger='interval',
         minutes=15,
         id='motor_alertas',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True
     )
 
     scheduler.start()
 
     print("✅ Scheduler iniciado")
-    print("📧 Reporte diario: 6:00 PM")
+    print("📧 Reporte diario: 9:00 PM (una vez por día)")
     print("🚗 Verificación kilometraje: 1:00 AM")
     print("🚨 Motor de alertas: cada 15 minutos")# Ejecutar cada minuto para pruebas
 
