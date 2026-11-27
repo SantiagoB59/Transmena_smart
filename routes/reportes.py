@@ -712,6 +712,46 @@ def obtener_registros_indicador(
 
         return None
 
+    # =================================================
+    # DEDUPLICACIÓN DE TRANSICIONES DE ESTADO
+    # =================================================
+    # Históricamente el motor insertó dos alertas (PENDIENTE y
+    # VENCIDO) para el MISMO ítem del plan y el mismo día. Ambas
+    # quedaron en la BD, así que el informe debe contarlas una
+    # sola vez. Se conserva la más representativa: primero la que
+    # tiene ejecución real, luego la de mayor severidad y, por
+    # último, la más reciente.
+    PESO_CATEGORIA = {
+        'VENCIDO': 2,
+        'POR_VENCER': 1,
+        'PENDIENTE': 1,
+    }
+
+    def clave_de_duplicado(alerta):
+        return (
+            getattr(alerta, 'vehiculo_id', None),
+            getattr(alerta, 'maquinaria_id', None),
+            getattr(alerta, 'vehiculo_plan_item_id', None),
+            getattr(alerta, 'maquinaria_plan_item_id', None),
+            getattr(alerta, 'plan_item_id', None),
+            getattr(alerta, 'vehiculo_plan_item_detalle_id', None),
+            _fecha_de_alerta(alerta),
+        )
+
+    def prioridad_de_grupo(item):
+        alerta, ejecucion = item
+        fecha = getattr(alerta, 'created_at', None)
+        return (
+            1 if ejecucion else 0,
+            PESO_CATEGORIA.get(
+                (alerta.categoria or '').upper(), 0
+            ),
+            fecha.timestamp() if hasattr(fecha, 'timestamp') else 0,
+            alerta.id or 0,
+        )
+
+    grupos_por_item = {}
+
     for alerta in alertas_reportadas:
 
         clave = clave_de_alerta(alerta)
@@ -719,13 +759,26 @@ def obtener_registros_indicador(
         if clave not in resultado:
             continue
 
+        ejecucion = mantenimiento_posterior(alerta)
+
+        clave_grupo = (clave, clave_de_duplicado(alerta))
+
+        grupos_por_item.setdefault(
+            clave_grupo, []
+        ).append((alerta, ejecucion))
+
+    for (clave, _), grupo in grupos_por_item.items():
+
+        alerta, ejecucion = max(
+            grupo,
+            key=prioridad_de_grupo
+        )
+
         registro = serializar_registro_indicador(
             alerta, 'ALERTA'
         )
 
         resultado[clave]['reportados'].append(registro)
-
-        ejecucion = mantenimiento_posterior(alerta)
 
         if ejecucion:
             resultado[clave]['ejecutados'].append(

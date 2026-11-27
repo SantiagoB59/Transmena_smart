@@ -211,11 +211,17 @@ def crear_alerta(
     # =====================================================
     # Para artículos/lotes la identidad es el registro exacto de
     # inventario, sin importar si cambia de POR_VENCER a VENCIDO.
+    #
+    # Lo mismo aplica a los mantenimientos por ítem del plan: el
+    # paso de PENDIENTE a VENCIDO es un cambio de estado del MISMO
+    # preventivo, no un episodio nuevo. Si se filtrara por
+    # categoría se insertaría una segunda alerta y el informe HSEQ
+    # contaría dos veces la misma tarea.
     if vehiculo_plan_item_detalle_id:
         query = query.filter_by(
             vehiculo_plan_item_detalle_id=vehiculo_plan_item_detalle_id
         )
-    else:
+    elif not (vehiculo_plan_item_id or maquinaria_plan_item_id):
         query = query.filter_by(categoria=categoria)
 
     if vehiculo_plan_item_id:
