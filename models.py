@@ -1089,6 +1089,9 @@ class MaquinariaMantenimiento(db.Model):
             "plan_item_id": self.plan_item_id,
             "maquinaria_plan_item_id": self.maquinaria_plan_item_id,
             "fecha": str(self.fecha) if self.fecha else None,
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
             "horas": self.horas,
             "tipo": self.tipo,
             "proveedor": self.proveedor,

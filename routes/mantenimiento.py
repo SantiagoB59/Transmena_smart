@@ -13,7 +13,7 @@ from models import (
 )
 from models import Alerta
 
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 
 from datetime import datetime
 from sockets.socket_handler import socketio
@@ -142,16 +142,16 @@ def listar():
 
     if desde:
         query = query.filter(
-            Mantenimiento.fecha >= desde
+            func.date(Mantenimiento.created_at) >= desde
         )
 
     if hasta:
         query = query.filter(
-            Mantenimiento.fecha <= hasta
+            func.date(Mantenimiento.created_at) <= hasta
         )
     mantenimientos = (
         query
-        .order_by(Mantenimiento.fecha.desc())
+        .order_by(Mantenimiento.created_at.desc())
         .all()
     )
 
@@ -816,19 +816,19 @@ def listar_maquinaria():
     if desde:
 
         query = query.filter(
-            MaquinariaMantenimiento.fecha >= desde
+            func.date(MaquinariaMantenimiento.created_at) >= desde
         )
 
     if hasta:
 
         query = query.filter(
-            MaquinariaMantenimiento.fecha <= hasta
+            func.date(MaquinariaMantenimiento.created_at) <= hasta
         )
 
     mantenimientos = (
         query
         .order_by(
-            desc(MaquinariaMantenimiento.fecha)
+            desc(MaquinariaMantenimiento.created_at)
         )
         .all()
     )

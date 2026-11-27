@@ -16,7 +16,7 @@ from models import (
     VehiculoCampoValor,
 )
 
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from sqlalchemy import or_
 
@@ -43,6 +43,13 @@ def _vehiculo_bloqueado(vehiculo):
 # =========================================================
 # EMAIL INDIVIDUAL: SOLO UNA VEZ POR EPISODIO
 # =========================================================
+# Una alerta con más de esta antigüedad se considera histórica. El
+# motor corre cada 15 min y reutiliza las filas antiguas; sin este
+# límite, al reiniciar con el histórico en email_enviado = 0 se
+# dispara un correo por cada alerta vieja.
+EMAIL_REINTENTO_MAXIMO = timedelta(minutes=60)
+
+
 def _enviar_email_alerta_unica(alerta, prioridad):
     """
     Evita que el motor de 15 minutos reenvíe el mismo correo una y otra
@@ -51,11 +58,33 @@ def _enviar_email_alerta_unica(alerta, prioridad):
     La alerta tiene el campo `email_enviado` justo para esto. Se marca
     de forma atómica antes de enviar: si otro proceso ya lo marcó,
     este no envía. Si SMTP falla, se desmarca para reintentar después.
+
+    Además, NUNCA se envía un correo de una alerta creada hace más de
+    `EMAIL_REINTENTO_MAXIMO`. Solo se permite reintentar durante la
+    primera hora (fallo SMTP temporal).
     """
     if prioridad not in ('CRITICA', 'ALTA'):
         return False
 
     if alerta.email_enviado:
+        return False
+
+    # ---------------------------------------------------------
+    # HISTÓRICAS: no reenviar aunque el flag esté en 0
+    # ---------------------------------------------------------
+    if (
+        alerta.created_at is not None
+        and datetime.utcnow() - alerta.created_at
+        > EMAIL_REINTENTO_MAXIMO
+    ):
+        # La marcamos como notificada para que el motor no la vuelva
+        # a evaluar en cada ciclo de 15 minutos.
+        Alerta.query.filter(Alerta.id == alerta.id).update(
+            {"email_enviado": True},
+            synchronize_session=False
+        )
+        alerta.email_enviado = True
+        db.session.commit()
         return False
 
     actualizados = (
@@ -228,43 +257,55 @@ def crear_alerta(
             return alerta_existente
 
         hubo_cambios = False
+        cambio_contenido = False
+        reactivada = False
 
         # Si la alerta estaba resuelta, se reactiva la MISMA fila.
         if alerta_existente.estado == 'RESUELTA':
+            reactivada = True
             alerta_existente.estado = 'ACTIVA'
             alerta_existente.fecha_resolucion = None
 
             if alerta_existente.tipo == 'MANTENIMIENTO':
                 alerta_existente.mantenimiento_id = None
 
-            # Es un episodio nuevo: permite un correo, pero solo uno.
-            alerta_existente.email_enviado = False
-
+            # NO se reinicia `email_enviado`: una alerta antigua que el
+            # motor reactiva no debe volver a enviar correo. Un episodio
+            # nuevo se crea como fila nueva y ya nace con el flag en False.
             hubo_cambios = True
 
         if alerta_existente.categoria != categoria:
             alerta_existente.categoria = categoria
             hubo_cambios = True
+            cambio_contenido = True
 
         if alerta_existente.titulo != titulo:
             alerta_existente.titulo = titulo
             hubo_cambios = True
+            cambio_contenido = True
 
         if alerta_existente.mensaje != mensaje:
             alerta_existente.mensaje = mensaje
             hubo_cambios = True
+            cambio_contenido = True
 
         if alerta_existente.prioridad != prioridad:
             alerta_existente.prioridad = prioridad
             hubo_cambios = True
+            cambio_contenido = True
 
         if alerta_existente.metadata_json != metadata:
             alerta_existente.metadata_json = metadata
             hubo_cambios = True
 
-        # actualizar fecha si hubo cambios
-        # siempre refresca la alerta (aunque no cambie texto)
-        alerta_existente.fecha_evento = datetime.utcnow()
+        # La fecha del evento solo se actualiza cuando cambia el
+        # contenido (categoría, título, mensaje o prioridad) o cuando
+        # se reactiva. Los cambios de metadata (km GPS, velocidad,
+        # días restantes) son refrescos del sensor, no un evento
+        # nuevo: no deben "rejuvenecer" una alerta antigua.
+
+        if cambio_contenido or reactivada:
+            alerta_existente.fecha_evento = datetime.utcnow()
 
         if hubo_cambios:
             db.session.commit()
