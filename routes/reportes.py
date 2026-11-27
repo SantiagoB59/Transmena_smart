@@ -670,47 +670,70 @@ def obtener_registros_indicador(
 
         return registro
 
-    def mantenimiento_posterior(alerta):
-        """Mantenimiento completado que atiende la alerta, o None."""
+    def mantenimientos_candidatos(alerta):
+        """Mantenimientos completados que pueden atender la alerta."""
         fecha_alerta = _fecha_de_alerta(alerta)
+        encontrados = []
 
         if getattr(alerta, 'mantenimiento_id', None):
             mantenimiento = Mantenimiento.query.get(
                 alerta.mantenimiento_id
             )
             if mantenimiento and mantenimiento.completado:
-                return mantenimiento
+                encontrados.append(mantenimiento)
 
         if getattr(alerta, 'maquinaria_mantenimiento_id', None):
             mantenimiento = MaquinariaMantenimiento.query.get(
                 alerta.maquinaria_mantenimiento_id
             )
             if mantenimiento and mantenimiento.completado:
-                return mantenimiento
+                encontrados.append(mantenimiento)
 
         if alerta.vehiculo_id and alerta.vehiculo_plan_item_id:
-            return Mantenimiento.query.filter(
-                Mantenimiento.completado == True,
-                Mantenimiento.vehiculo_plan_item_id
-                == alerta.vehiculo_plan_item_id,
-                Mantenimiento.fecha >= fecha_alerta
-            ).order_by(
-                Mantenimiento.fecha.asc(),
-                Mantenimiento.id.asc()
-            ).first()
+            encontrados.extend(
+                Mantenimiento.query.filter(
+                    Mantenimiento.completado == True,
+                    Mantenimiento.vehiculo_plan_item_id
+                    == alerta.vehiculo_plan_item_id,
+                    Mantenimiento.fecha >= fecha_alerta
+                ).order_by(
+                    Mantenimiento.fecha.asc(),
+                    Mantenimiento.id.asc()
+                ).all()
+            )
 
-        if alerta.maquinaria_id and alerta.maquinaria_plan_item_id:
-            return MaquinariaMantenimiento.query.filter(
-                MaquinariaMantenimiento.completado == True,
-                MaquinariaMantenimiento.maquinaria_plan_item_id
-                == alerta.maquinaria_plan_item_id,
-                MaquinariaMantenimiento.fecha >= fecha_alerta
-            ).order_by(
-                MaquinariaMantenimiento.fecha.asc(),
-                MaquinariaMantenimiento.id.asc()
-            ).first()
+        elif alerta.maquinaria_id and alerta.maquinaria_plan_item_id:
+            encontrados.extend(
+                MaquinariaMantenimiento.query.filter(
+                    MaquinariaMantenimiento.completado == True,
+                    MaquinariaMantenimiento.maquinaria_plan_item_id
+                    == alerta.maquinaria_plan_item_id,
+                    MaquinariaMantenimiento.fecha >= fecha_alerta
+                ).order_by(
+                    MaquinariaMantenimiento.fecha.asc(),
+                    MaquinariaMantenimiento.id.asc()
+                ).all()
+            )
 
-        return None
+        # Quitar repetidos (puede venir por id directo y por ítem).
+        vistos = set()
+        unicos = []
+
+        for mantenimiento in encontrados:
+            clave = (
+                type(mantenimiento).__name__,
+                mantenimiento.id
+            )
+            if clave not in vistos:
+                vistos.add(clave)
+                unicos.append(mantenimiento)
+
+        return unicos
+
+    def mantenimiento_posterior(alerta):
+        """Primer mantenimiento candidato que atiende la alerta."""
+        candidatos = mantenimientos_candidatos(alerta)
+        return candidatos[0] if candidatos else None
 
     # =================================================
     # DEDUPLICACIÓN DE TRANSICIONES DE ESTADO
@@ -738,6 +761,61 @@ def obtener_registros_indicador(
             _fecha_de_alerta(alerta),
         )
 
+    def alerta_es_destino_original(alerta, mantenimiento):
+        """
+        La ejecución solo cuenta en el consolidado de su alerta más
+        antigua. Así una factura registrada después sigue sumando en
+        el mes en que se venció la alerta, pero NO se repite en un
+        consolidado posterior.
+        """
+        fecha_mantenimiento = getattr(mantenimiento, 'fecha', None)
+
+        if fecha_mantenimiento is None or alerta.created_at is None:
+            return True
+
+        consulta = Alerta.query.filter(
+            Alerta.tipo == TIPO_ALERTA_INDICADOR,
+            Alerta.created_at < alerta.created_at,
+            Alerta.id != alerta.id
+        )
+
+        if alerta.vehiculo_id and alerta.vehiculo_plan_item_id:
+            consulta = consulta.filter(
+                Alerta.vehiculo_plan_item_id
+                == alerta.vehiculo_plan_item_id
+            )
+        elif alerta.maquinaria_id and alerta.maquinaria_plan_item_id:
+            consulta = consulta.filter(
+                Alerta.maquinaria_plan_item_id
+                == alerta.maquinaria_plan_item_id
+            )
+        else:
+            return True
+
+        clave_actual = clave_de_duplicado(alerta)
+
+        for otra in consulta.all():
+            # PENDIENTE/VENCIDO del mismo día son la misma alerta:
+            # no se quitan la ejecución entre sí.
+            if clave_de_duplicado(otra) == clave_actual:
+                continue
+
+            if (
+                getattr(otra, 'mantenimiento_id', None)
+                == mantenimiento.id
+            ):
+                return False
+
+            otra_fecha = _fecha_de_alerta(otra)
+
+            if (
+                otra_fecha is not None
+                and otra_fecha <= fecha_mantenimiento
+            ):
+                return False
+
+        return True
+
     def prioridad_de_grupo(item):
         alerta, ejecucion = item
         fecha = getattr(alerta, 'created_at', None)
@@ -759,7 +837,12 @@ def obtener_registros_indicador(
         if clave not in resultado:
             continue
 
-        ejecucion = mantenimiento_posterior(alerta)
+        ejecucion = None
+
+        for candidato in mantenimientos_candidatos(alerta):
+            if alerta_es_destino_original(alerta, candidato):
+                ejecucion = candidato
+                break
 
         clave_grupo = (clave, clave_de_duplicado(alerta))
 
